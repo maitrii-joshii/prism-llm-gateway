@@ -1,0 +1,12 @@
+[
+  {
+    "model_name": "gpt-4o-mini",
+    "input_price_per_million": 0.15,
+    "output_price_per_million": 0.60
+  },
+  {
+    "model_name": "llama-3.3-70b-versatile",
+    "input_price_per_million": 0.59,
+    "output_price_per_million": 0.79
+  }
+]

@@ -1,0 +1,12 @@
+[
+  {
+    "key_hash": "sample-hash-001",
+    "tenant_id": "tenant-demo",
+    "budget_usd": 100.0,
+    "rate_limit_rpm": 60,
+    "model_allowlist": ["gpt-4o-mini", "llama-3.3-70b-versatile"],
+    "cache_enabled": true,
+    "cache_threshold": 0.8,
+    "status": "active"
+  }
+]
