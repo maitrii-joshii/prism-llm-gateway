@@ -1,4 +1,3 @@
-
 """Custom exceptions for the Prism LLM Gateway."""
 
 

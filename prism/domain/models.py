@@ -32,6 +32,11 @@ class RequestContext(BaseModel):
     decision_trace: list[str] = Field(default_factory=list)
     start_time: datetime
 
+    # Response metadata used to populate Prism response headers.
+    cache_status: str = "miss"
+    fallback_used: bool = False
+    cost_usd: float = Field(default=0.0, ge=0)
+
 
 class ProviderResponse(BaseModel):
     """Normalized response returned by an LLM provider."""
