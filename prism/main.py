@@ -1,73 +1,75 @@
-"""Application composition root for the Prism LLM Gateway."""
+"""Application entry point for Prism LLM Gateway."""
 
 import os
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
-from prism.adapters.openai_compatible import OpenAICompatibleProvider
-from prism.adapters.system_clock import SystemClock
-from prism.api.error_handler import prism_error_handler
+from prism.api.middleware import request_id_middleware
 from prism.api.routes import router
-from prism.config.loader import load_configuration
-from prism.config.settings import Settings
+from prism.config.logging import (
+    configure_logging,
+    get_logger,
+    get_uvicorn_logging_config,
+)
 from prism.domain.errors import PrismError
 
 
+logger = get_logger(__name__)
+
+
 def create_app() -> FastAPI:
-    """Load configuration and wire application dependencies."""
+    """Create and configure the Prism FastAPI application."""
 
-    # 1. Load environment variables and application settings.
-    settings = Settings.from_env()
+    configure_logging()
 
-    # 2. Load and validate the configuration files.
-    config = load_configuration(settings.config_dir)
-
-    # 3. Create the clock dependency.
-    clock = SystemClock()
-
-    # 4. Create the alpha provider adapter.
-    alpha_provider_url = os.getenv(
-        "ALPHA_PROVIDER_URL",
-        "http://localhost:9001",
-    )
-    alpha_api_key = os.getenv(
-        "ALPHA_PROVIDER_API_KEY",
-        "mock-key",
+    app = FastAPI(
+        title="Prism LLM Gateway",
+        version="0.1.0",
     )
 
-    provider_timeout = (
-        settings.provider_timeout_seconds
-        or config.gateway_config.provider_timeout_seconds
-    )
+    # Register request ID and structured logging middleware.
+    app.middleware("http")(request_id_middleware)
 
-    provider_adapter = OpenAICompatibleProvider(
-        base_url=alpha_provider_url,
-        api_key=alpha_api_key,
-        timeout=provider_timeout,
-    )
+    # Register API routes.
+    app.include_router(router)
 
-    # 5. Create the FastAPI application.
-    application = FastAPI(title="Prism LLM Gateway")
+    @app.exception_handler(PrismError)
+    async def prism_error_handler(
+        request: Request,
+        exc: PrismError,
+    ) -> JSONResponse:
+        """Convert Prism errors into structured JSON responses."""
 
-    # Store dependencies and loaded configuration in the app.
-    application.state.clock = clock
-    application.state.provider_adapter = provider_adapter
-    application.state.config = config
+        logger.error(
+            "Prism request failed",
+            extra={
+                "path": request.url.path,
+                "method": request.method,
+                "status_code": exc.status_code,
+                "error_type": exc.error_type,
+            },
+        )
 
-    # 6. Register routes and the global error handler.
-    application.include_router(router)
-    application.add_exception_handler(
-        PrismError,
-        prism_error_handler,
-    )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": {
+                    "message": exc.message,
+                    "type": exc.error_type,
+                    "code": exc.status_code,
+                }
+            },
+        )
 
-    # Health endpoint for checking whether the gateway is running.
-    @application.get("/health")
+    @app.get("/health")
     async def health() -> dict[str, str]:
+        """Return the gateway health status."""
+
         return {"status": "ok"}
 
-    return application
+    return app
 
 
 app = create_app()
@@ -79,10 +81,12 @@ def main() -> None:
     port = int(os.getenv("PORT", "3000"))
 
     uvicorn.run(
-        "prism.main:app",
+        app,
         host="0.0.0.0",
         port=port,
         reload=False,
+        log_config=get_uvicorn_logging_config(),
+        access_log=False,
     )
 
 
