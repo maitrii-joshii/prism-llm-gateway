@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 
 class VirtualKeyConfig(BaseModel):
@@ -19,25 +19,6 @@ class VirtualKeyConfig(BaseModel):
     status: str
 
 
-class RequestContext(BaseModel):
-    """Carries request data and decisions through the gateway pipeline."""
-
-    request_id: str
-    key_config: VirtualKeyConfig
-    model_requested: str
-    model_resolved: str | None = None
-    provider_name: str | None = None
-    messages: list[dict[str, Any]]
-    stream: bool
-    decision_trace: list[str] = Field(default_factory=list)
-    start_time: datetime
-
-    # Response metadata used to populate Prism response headers.
-    cache_status: str = "miss"
-    fallback_used: bool = False
-    cost_usd: float = Field(default=0.0, ge=0)
-
-
 class ProviderResponse(BaseModel):
     """Normalized response returned by an LLM provider."""
 
@@ -48,6 +29,34 @@ class ProviderResponse(BaseModel):
     total_tokens: int = Field(ge=0)
     finish_reason: str | None = None
     raw_response: dict[str, Any]
+
+
+class RequestContext(BaseModel):
+    """Carries request data and decisions through the gateway pipeline."""
+
+    request_id: str
+    key_config: VirtualKeyConfig | None = None
+
+    model_requested: str = ""
+    model_resolved: str | None = None
+    provider_name: str | None = None
+
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    stream: bool = False
+
+    # Preserve the complete original request for provider forwarding.
+    request_payload: dict[str, Any] = Field(default_factory=dict)
+
+    # Store the normalized provider response after provider execution.
+    provider_response: ProviderResponse | None = None
+
+    decision_trace: list[str] = Field(default_factory=list)
+    start_time: datetime
+
+    # Response metadata used to populate Prism response headers.
+    cache_status: str = "miss"
+    fallback_used: bool = False
+    cost_usd: float = Field(default=0.0, ge=0)
 
 
 class ModelPricing(BaseModel):

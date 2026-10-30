@@ -17,6 +17,7 @@ class Settings:
     config_dir: Path
     provider_timeout_seconds: float | None = None
     max_retries: int | None = None
+    max_tokens_cap: int = 4096
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -30,6 +31,7 @@ class Settings:
 
         timeout_value = os.getenv("PRISM_PROVIDER_TIMEOUT_SECONDS")
         retries_value = os.getenv("PRISM_MAX_RETRIES")
+        max_tokens_value = os.getenv("PRISM_MAX_TOKENS_CAP", "4096")
 
         try:
             timeout = (
@@ -49,6 +51,13 @@ class Settings:
                 "PRISM_MAX_RETRIES must be an integer."
             ) from exc
 
+        try:
+            max_tokens = int(max_tokens_value)
+        except ValueError as exc:
+            raise ValueError(
+                "PRISM_MAX_TOKENS_CAP must be an integer."
+            ) from exc
+
         if timeout is not None and timeout <= 0:
             raise ValueError(
                 "PRISM_PROVIDER_TIMEOUT_SECONDS must be greater than zero."
@@ -59,10 +68,16 @@ class Settings:
                 "PRISM_MAX_RETRIES must be zero or greater."
             )
 
+        if max_tokens <= 0:
+            raise ValueError(
+                "PRISM_MAX_TOKENS_CAP must be greater than zero."
+            )
+
         return cls(
             config_dir=config_dir,
             provider_timeout_seconds=timeout,
             max_retries=retries,
+            max_tokens_cap=max_tokens,
         )
 
 
