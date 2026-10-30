@@ -2,11 +2,13 @@
 
 import logging
 import re
+from unittest.mock import Mock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from prism.adapters.sqlite_repos import hash_api_key
 from prism.adapters.system_clock import SystemClock
 from prism.api.error_handler import prism_error_handler
 from prism.api.middleware import request_id_middleware
@@ -16,32 +18,32 @@ from prism.domain.models import VirtualKeyConfig
 from tests.helpers.fake_adapter import FakeProviderAdapter
 
 
+TEST_API_KEY = "integration-test-api-key"
+
+
 @pytest.fixture
 def client():
     """Create a test application with a fake provider."""
 
     app = FastAPI(title="Prism Integration Test")
 
-    # Configure the dependencies required by RequestContext.
     app.state.clock = SystemClock()
-    app.state.config = type(
-        "TestConfig",
-        (),
-        {
-            "seed_keys": [
-                VirtualKeyConfig(
-                    key_hash="test-hash",
-                    tenant_id="test-tenant",
-                    budget_usd=100.0,
-                    rate_limit_rpm=60,
-                    model_allowlist=["gpt-4o-mini"],
-                    cache_enabled=True,
-                    cache_threshold=0.8,
-                    status="active",
-                )
-            ]
-        },
-    )()
+
+    key_config = VirtualKeyConfig(
+        key_hash=hash_api_key(TEST_API_KEY),
+        tenant_id="test-tenant",
+        budget_usd=100.0,
+        rate_limit_rpm=60,
+        model_allowlist=["gpt-4o-mini"],
+        cache_enabled=True,
+        cache_threshold=0.8,
+        status="active",
+    )
+
+    key_repository = Mock()
+    key_repository.get_by_hash.return_value = key_config
+
+    app.state.key_repository = key_repository
 
     app.middleware("http")(request_id_middleware)
 
@@ -69,7 +71,7 @@ def assert_valid_request_id(response):
 
 
 def test_valid_request_passes_through_to_fake_provider(client):
-    """A valid request returns the fake provider's completion."""
+    """An authenticated request reaches the fake provider."""
 
     payload = {
         "model": "gpt-4o-mini",
@@ -78,18 +80,20 @@ def test_valid_request_passes_through_to_fake_provider(client):
         ],
     }
 
-    response = client.post("/v1/chat/completions", json=payload)
+    response = client.post(
+        "/v1/chat/completions",
+        json=payload,
+        headers={"x-api-key": TEST_API_KEY},
+    )
 
     assert response.status_code == 200
 
-    # Verify all five custom response headers.
     assert_valid_request_id(response)
     assert response.headers["x-prism-provider"] == "alpha/fake-model"
     assert response.headers["x-prism-cache"] == "miss"
     assert response.headers["x-prism-fallback"] == "false"
     assert response.headers["x-prism-cost-usd"] == "0"
 
-    # Verify the existing OpenAI-compatible response body.
     body = response.json()
     assert body["object"] == "chat.completion"
     assert body["model"] == "fake-model"
@@ -99,10 +103,58 @@ def test_valid_request_passes_through_to_fake_provider(client):
     )
     assert body["usage"]["total_tokens"] == 15
 
-    # Verify that the request reached the fake provider.
     adapter = client.app.state.fake_adapter
     assert adapter.call_count == 1
     assert adapter.last_request == payload
+
+
+def test_missing_api_key_returns_401(client):
+    """A request without an API key must be rejected."""
+
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "user", "content": "Hello, Prism!"}
+        ],
+    }
+
+    response = client.post(
+        "/v1/chat/completions",
+        json=payload,
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["type"] == "authentication_error"
+    assert response.json()["error"]["message"] == (
+        "Invalid or missing API key."
+    )
+
+    assert client.app.state.fake_adapter.call_count == 0
+
+
+def test_invalid_api_key_returns_401(client):
+    """An invalid API key must be rejected."""
+
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "user", "content": "Hello, Prism!"}
+        ],
+    }
+
+    response = client.post(
+        "/v1/chat/completions",
+        json=payload,
+        headers={"x-api-key": "invalid-api-key"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["type"] == "authentication_error"
+    assert response.json()["error"]["message"] == (
+        "Invalid or missing API key."
+    )
+
+    assert client.app.state.fake_adapter.call_count == 0
 
 
 def test_successful_request_logs_decision_trace(client, caplog):
@@ -119,6 +171,7 @@ def test_successful_request_logs_decision_trace(client, caplog):
         response = client.post(
             "/v1/chat/completions",
             json=payload,
+            headers={"x-api-key": TEST_API_KEY},
         )
 
     assert response.status_code == 200
@@ -137,10 +190,10 @@ def test_successful_request_logs_decision_trace(client, caplog):
 
     assert trace_record.levelno == logging.INFO
     assert "request validation ok" in trace_message
+    assert "auth ok" in trace_message
     assert "provider alpha selected" in trace_message
     assert "fake-model response received" in trace_message
 
-    # The trace must be associated with the same request as the response.
     assert trace_record.request_id == response.headers[
         "x-prism-request-id"
     ]
@@ -156,20 +209,20 @@ def test_missing_model_returns_400(client):
                 {"role": "user", "content": "Hello"}
             ]
         },
+        headers={"x-api-key": TEST_API_KEY},
     )
 
     assert response.status_code == 400
     assert response.json()["error"]["type"] == (
-        "invalid_request_error"
+        "invalid_request"
     )
     assert_valid_request_id(response)
 
-    # Invalid requests should not reach the provider.
     assert client.app.state.fake_adapter.call_count == 0
 
 
 def test_health_endpoint_returns_ok(client):
-    """The health endpoint confirms that the app is running."""
+    """The health endpoint does not require authentication."""
 
     response = client.get("/health")
 

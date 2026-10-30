@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from prism.domain.security import hash_api_key
 from prism.config.settings import Settings
 from prism.domain.models import (
     AliasConfig,
@@ -53,7 +54,7 @@ def _read_json(path: Path) -> Any:
 
 
 def _validate_seed_keys(data: Any) -> list[VirtualKeyConfig]:
-    """Validate tenant keys, budgets, and rate limits."""
+    """Validate tenant keys and convert raw keys into SHA-256 hashes."""
 
     if not isinstance(data, list):
         raise ConfigLoadError(
@@ -67,6 +68,13 @@ def _validate_seed_keys(data: Any) -> list[VirtualKeyConfig]:
 
         if not isinstance(item, dict):
             raise ConfigLoadError(f"{label} must be a JSON object.")
+
+        raw_key = item.get("key")
+
+        if not isinstance(raw_key, str) or not raw_key.strip():
+            raise ConfigLoadError(
+                f"{label}: key must be a non-empty string."
+            )
 
         budget = item.get("budget_usd")
         if (
@@ -88,8 +96,14 @@ def _validate_seed_keys(data: Any) -> list[VirtualKeyConfig]:
                 f"{label}: rate_limit_rpm must be a positive integer."
             )
 
+        key_data = {
+            **item,
+            "key_hash": hash_api_key(raw_key),
+        }
+        key_data.pop("key", None)
+
         try:
-            keys.append(VirtualKeyConfig.model_validate(item))
+            keys.append(VirtualKeyConfig.model_validate(key_data))
         except ValidationError as exc:
             raise ConfigLoadError(f"Invalid {label}: {exc}") from exc
 

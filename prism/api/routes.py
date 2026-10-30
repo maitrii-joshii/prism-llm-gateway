@@ -5,12 +5,14 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Request, Response
-from fastapi.responses import JSONResponse
 
 from prism.config.logging import get_logger
-from prism.domain.errors import UpstreamError
+from prism.domain.errors import InvalidRequestError, UpstreamError
 from prism.domain.models import ProviderResponse, RequestContext
 from prism.ports.provider import ProviderAdapter
+from prism.services.pipeline import Pipeline
+from prism.services.stages.auth import authenticate_request
+from prism.services.stages.validate import validate_request
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -25,21 +27,6 @@ def get_provider_adapter(request: Request) -> ProviderAdapter:
         raise UpstreamError("Provider adapter is not configured")
 
     return adapter
-
-
-def invalid_request(message: str) -> JSONResponse:
-    """Build an OpenAI-compatible HTTP 400 response."""
-
-    return JSONResponse(
-        status_code=400,
-        content={
-            "error": {
-                "message": message,
-                "type": "invalid_request_error",
-                "code": 400,
-            }
-        },
-    )
 
 
 def format_completion_response(
@@ -98,130 +85,159 @@ async def chat_completions(
     request: Request,
     response: Response,
 ) -> Any:
-    """Validate a chat request, call the provider, and set response headers."""
+    """Process a chat completion request through the pipeline."""
 
-    model = payload.get("model")
-    messages = payload.get("messages")
-    stream = payload.get("stream", False)
+    # Retrieve the key repository.
+    key_repository = getattr(
+        request.app.state,
+        "key_repository",
+        None,
+    )
 
-    if not isinstance(model, str) or not model.strip():
-        logger.warning(
-            "Invalid chat completion request",
-            extra={
-                "path": "/v1/chat/completions",
-                "error_type": "InvalidModel",
-            },
-        )
-        return invalid_request(
-            "'model' is required and must be a non-empty string"
-        )
+    if key_repository is None:
+        raise UpstreamError("Key repository is not configured")
 
-    if not isinstance(messages, list) or not messages:
-        logger.warning(
-            "Invalid chat completion request",
-            extra={
-                "path": "/v1/chat/completions",
-                "model": model,
-                "error_type": "InvalidMessages",
-            },
-        )
-        return invalid_request(
-            "'messages' is required and must be a non-empty list"
-        )
-
-    if not all(isinstance(message, dict) for message in messages):
-        logger.warning(
-            "Invalid chat completion request",
-            extra={
-                "path": "/v1/chat/completions",
-                "model": model,
-                "error_type": "InvalidMessages",
-            },
-        )
-        return invalid_request(
-            "'messages' must contain JSON objects"
-        )
-
-    if not isinstance(stream, bool):
-        logger.warning(
-            "Invalid chat completion request",
-            extra={
-                "path": "/v1/chat/completions",
-                "model": model,
-                "error_type": "InvalidStream",
-            },
-        )
-        return invalid_request("'stream' must be a boolean")
-
-    adapter = get_provider_adapter(request)
-
-    # Prototype only: use the first configured seed key to populate
-    # context metadata. This does NOT authenticate the incoming caller.
-    config = getattr(request.app.state, "config", None)
-    seed_keys = getattr(config, "seed_keys", None)
-
-    if not seed_keys:
-        raise UpstreamError(
-            "Seed key configuration is not available"
-        )
-
+    # Retrieve the clock.
     clock = getattr(request.app.state, "clock", None)
 
     if clock is None:
         raise UpstreamError("Clock is not configured")
 
+    # Create context before validation so validation runs as a pipeline stage.
+    initial_model = payload.get("model", "")
+    initial_messages = payload.get("messages", [])
+
     context = RequestContext(
         request_id=request.state.request_id,
-        key_config=seed_keys[0],
-        model_requested=model,
-        messages=messages,
-        stream=stream,
+        model_requested=(
+            initial_model if isinstance(initial_model, str) else ""
+        ),
+        messages=(
+            initial_messages
+            if isinstance(initial_messages, list)
+            else []
+        ),
+        stream=False,
+        request_payload=payload.copy(),
         start_time=clock.now(),
-        provider_name="alpha",
-        decision_trace=["request validation ok"],
     )
 
-    # Record the provider selected by the current prototype flow.
-    context.decision_trace.append("provider alpha selected")
+    # Stage 1: Authenticate the incoming request.
+    async def auth_stage(
+        context: RequestContext,
+    ) -> RequestContext:
+        await authenticate_request(
+            request,
+            context,
+            key_repository,
+        )
+        return context
 
-    logger.info(
-        "Forwarding request to provider",
-        extra={
-            "path": "/v1/chat/completions",
-            "model": model,
-        },
+    # Stage 2: Validate the request payload.
+    async def validate_stage(
+        context: RequestContext,
+    ) -> RequestContext:
+        validated_payload = validate_request(
+            context.request_payload
+        )
+
+        stream = validated_payload.get("stream", False)
+
+        if not isinstance(stream, bool):
+            raise InvalidRequestError(
+                "'stream' must be a boolean."
+            )
+
+        context.request_payload = validated_payload
+        context.model_requested = validated_payload["model"]
+        context.messages = validated_payload["messages"]
+        context.stream = stream
+
+        # Preserve the original validation trace entry.
+        context.decision_trace.append("request validation ok")
+
+        return context
+
+    # Stage 3: Call the selected provider.
+    async def provider_call_stage(
+        context: RequestContext,
+    ) -> RequestContext:
+        adapter = get_provider_adapter(request)
+
+        context.provider_name = "alpha"
+        context.decision_trace.append("provider alpha selected")
+
+        logger.info(
+            "Forwarding request to provider",
+            extra={
+                "path": "/v1/chat/completions",
+                "model": context.model_requested,
+            },
+        )
+
+        result = await adapter.complete(
+            context.request_payload
+        )
+
+        context.provider_response = result
+        context.model_resolved = result.model
+
+        context.decision_trace.append(
+            f"{result.model} response received"
+        )
+
+        return context
+
+    # Define the ordered pipeline.
+    stages = [
+        auth_stage,
+        validate_stage,
+        # Future stages:
+        # rate_limit_stage,
+        # resolve_model_stage,
+        # allowlist_stage,
+        # budget_stage,
+        # cache_stage,
+        provider_call_stage,
+    ]
+
+    pipeline = getattr(
+        request.app.state,
+        "pipeline",
+        None,
+    ) or Pipeline()
+
+    # Execute all stages sequentially.
+    context = await pipeline.run(
+        context,
+        stages=stages,
     )
-
-    # Call the provider using the existing pass-through flow.
-    result = await adapter.complete(payload)
-
-    # Record the model reported by the provider.
-    context.model_resolved = result.model
-    context.decision_trace.append(
-        f"{result.model} response received"
-    )
-
-    # Add response metadata from the context after the provider succeeds.
-    set_context_headers(response, context)
-
-    logger.info(
-        "Provider response received",
-        extra={
-            "path": "/v1/chat/completions",
-            "model": result.model,
-        },
-    )
-
-    # Prepare the response body before logging the final decision trace.
-    completion_response = format_completion_response(result)
 
     logger.info(
         "Decision trace: %s",
         " → ".join(context.decision_trace),
         extra={
             "path": "/v1/chat/completions",
-            "model": result.model,
+            "model": context.model_requested,
         },
     )
 
-    return completion_response
+    if context.provider_response is None:
+        raise UpstreamError(
+            "Pipeline completed without a provider response"
+        )
+
+    # Add response metadata.
+    set_context_headers(response, context)
+
+    logger.info(
+        "Provider response received",
+        extra={
+            "path": "/v1/chat/completions",
+            "model": context.model_resolved,
+        },
+    )
+
+    return format_completion_response(
+        context.provider_response
+    )
