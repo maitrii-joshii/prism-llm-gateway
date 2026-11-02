@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+import json
 from typing import Any
 
 import httpx
@@ -29,14 +30,22 @@ class OpenAICompatibleProvider(ProviderAdapter):
         self.timeout = timeout
         self.client = client
 
+        # Stores usage information received in the final SSE data chunk.
+        self.last_stream_usage: dict[str, int] | None = None
+
+    def _build_headers(self) -> dict[str, str]:
+        """Build common headers for provider requests."""
+
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
     async def complete(self, request: dict[str, Any]) -> ProviderResponse:
         """Send a chat completion request and normalize the response."""
 
         url = f"{self.base_url}/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = self._build_headers()
 
         try:
             if self.client is None:
@@ -105,8 +114,105 @@ class OpenAICompatibleProvider(ProviderAdapter):
         self,
         request: dict[str, Any],
     ) -> AsyncIterator[dict[str, Any]]:
-        """Streaming will be implemented in a later task."""
-        raise NotImplementedError(
-            "Streaming is not implemented yet"
-        )
-        yield {}
+        """Stream parsed SSE events from the provider without buffering."""
+
+        url = f"{self.base_url}/v1/chat/completions"
+        headers = self._build_headers()
+
+        # Ensure the provider receives a streaming request.
+        stream_request = {
+            **request,
+            "stream": True,
+            "stream_options": {
+                **request.get("stream_options", {}),
+                "include_usage": True,
+            },
+        }
+
+        self.last_stream_usage = None
+
+        try:
+            if self.client is None:
+                async with httpx.AsyncClient(
+                    timeout=self.timeout
+                ) as client:
+                    async with client.stream(
+                        "POST",
+                        url,
+                        headers=headers,
+                        json=stream_request,
+                        timeout=self.timeout,
+                    ) as response:
+                        async for event in self._read_sse_events(response):
+                            yield event
+            else:
+                async with self.client.stream(
+                    "POST",
+                    url,
+                    headers=headers,
+                    json=stream_request,
+                    timeout=self.timeout,
+                ) as response:
+                    async for event in self._read_sse_events(response):
+                        yield event
+
+        except httpx.TimeoutException as exc:
+            raise UpstreamError(
+                f"Provider streaming timed out after {self.timeout} seconds"
+            ) from exc
+
+        except httpx.HTTPStatusError as exc:
+            raise UpstreamError(
+                f"Provider returned HTTP {exc.response.status_code}"
+            ) from exc
+
+        except httpx.RequestError as exc:
+            raise UpstreamError(
+                f"Provider streaming connection failed: {exc}"
+            ) from exc
+
+    async def _read_sse_events(
+        self,
+        response: httpx.Response,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Read and parse SSE events as they arrive."""
+
+        response.raise_for_status()
+
+        async for line in response.aiter_lines():
+            # Ignore blank lines and SSE comments.
+            if not line or line.startswith(":"):
+                continue
+
+            # Only process SSE data fields.
+            if not line.startswith("data:"):
+                continue
+
+            data = line[len("data:"):].strip()
+
+            # The provider has finished sending its response.
+            if data == "[DONE]":
+                yield {"done": True}
+                return
+
+            try:
+                event = json.loads(data)
+            except json.JSONDecodeError as exc:
+                raise UpstreamError(
+                    "Provider returned an invalid streaming response"
+                ) from exc
+
+            # Extract usage from the final usage chunk.
+            usage = event.get("usage")
+
+            if isinstance(usage, dict):
+                self.last_stream_usage = {
+                    "prompt_tokens": usage.get("prompt_tokens", 0),
+                    "completion_tokens": usage.get(
+                        "completion_tokens", 0
+                    ),
+                    "total_tokens": usage.get("total_tokens", 0),
+                }
+
+            # Yield immediately; do not collect the complete response.
+            yield event
