@@ -7,6 +7,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from prism.adapters.openai_compatible import OpenAICompatibleProvider
 from prism.adapters.sqlite_repos import (
     SQLiteKeyRepository,
     SQLiteUsageRepository,
@@ -55,7 +56,23 @@ async def lifespan(app: FastAPI):
     clock = SystemClock()
     rate_limiter = TokenBucketRateLimiter(clock)
 
-    # 6. Make resources available to API routes.
+    # 6. Initialize the Alpha provider adapter.
+    alpha_provider_url = os.getenv("ALPHA_PROVIDER_URL")
+    alpha_provider_key = os.getenv("ALPHA_PROVIDER_KEY")
+
+    if not alpha_provider_url:
+        raise RuntimeError("ALPHA_PROVIDER_URL environment variable is required")
+
+    if not alpha_provider_key:
+        raise RuntimeError("ALPHA_PROVIDER_KEY environment variable is required")
+
+    provider_adapter = OpenAICompatibleProvider(
+        base_url=alpha_provider_url,
+        api_key=alpha_provider_key,
+        timeout=loaded_config.gateway_config.provider_timeout_seconds,
+    )
+
+    # 7. Make resources available to API routes.
     app.state.loaded_config = loaded_config
     app.state.key_repository = key_repository
     app.state.usage_repository = usage_repository
@@ -63,6 +80,7 @@ async def lifespan(app: FastAPI):
     app.state.pipeline = Pipeline()
     app.state.clock = clock
     app.state.rate_limiter = rate_limiter
+    app.state.provider_adapter = provider_adapter
 
     logger.info("Prism startup initialization completed")
 

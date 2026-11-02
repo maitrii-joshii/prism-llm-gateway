@@ -1,10 +1,13 @@
 """API routes for the Prism LLM Gateway."""
 
+import json
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Request, Response
+from fastapi.responses import StreamingResponse
 
 from prism.config.logging import get_logger
 from prism.domain.cost import CostCalculator
@@ -12,6 +15,7 @@ from prism.domain.errors import InvalidRequestError, UpstreamError
 from prism.domain.models import ProviderResponse, RequestContext
 from prism.ports.provider import ProviderAdapter
 from prism.services.pipeline import Pipeline
+from prism.services.streaming import stream_response
 from prism.services.stages.auth import authenticate_request
 from prism.services.stages.allowlist import enforce_model_allowlist
 from prism.services.stages.budget import enforce_budget
@@ -83,6 +87,73 @@ def set_context_headers(
     )
 
 
+def build_streaming_headers(
+    context: RequestContext,
+) -> dict[str, str]:
+    """Build response headers before streaming starts."""
+
+    if not context.provider_name or not context.model_resolved:
+        raise UpstreamError(
+            "Provider and model must be resolved before streaming."
+        )
+
+    return {
+        "x-prism-request-id": context.request_id,
+        "x-prism-provider": (
+            f"{context.provider_name}/{context.model_resolved}"
+        ),
+        "x-prism-cache": "miss",
+        "x-prism-fallback": str(context.fallback_used).lower(),
+        # Final cost is not known until the provider sends usage.
+        "x-prism-cost-usd": "0",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+
+
+async def format_streaming_body(
+    provider_stream: AsyncIterator[dict[str, Any]],
+    context: RequestContext,
+    usage_repository: Any,
+    loaded_config: Any,
+    adapter: Any,
+) -> AsyncIterator[str]:
+    """Forward SSE chunks and format the final OpenAI DONE marker."""
+
+    streaming_generator = stream_response(
+        provider_stream=provider_stream,
+        context=context,
+        usage_repository=usage_repository,
+        loaded_config=loaded_config,
+        adapter=adapter,
+    )
+
+    try:
+        async for formatted_chunk in streaming_generator:
+            # stream_response represents completion internally as
+            # data: {"done": true}\n\n.
+            try:
+                data = formatted_chunk.removeprefix("data: ").strip()
+                event = json.loads(data)
+
+                if event.get("done") is True:
+                    yield "data: [DONE]\n\n"
+                    # Continue iteration so the underlying generator
+                    # reaches its normal completion and executes finally.
+                    continue
+
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
+            # Forward each chunk immediately.
+            yield formatted_chunk
+
+    finally:
+        # Ensure the underlying generator is closed if the client
+        # disconnects or the response generator is cancelled.
+        await streaming_generator.aclose()
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(
     payload: dict[str, Any],
@@ -141,7 +212,6 @@ async def chat_completions(
         start_time=clock.now(),
     )
 
-    # Stage 1: Authenticate the incoming request.
     async def auth_stage(
         context: RequestContext,
     ) -> RequestContext:
@@ -152,7 +222,6 @@ async def chat_completions(
         )
         return context
 
-    # Stage 2: Validate the request payload.
     async def validate_stage(
         context: RequestContext,
     ) -> RequestContext:
@@ -176,7 +245,6 @@ async def chat_completions(
 
         return context
 
-    # Stage 3: Enforce the authenticated key's rate limit.
     async def rate_limit_stage(
         context: RequestContext,
     ) -> RequestContext:
@@ -185,13 +253,11 @@ async def chat_completions(
             rate_limiter,
         )
 
-    # Stage 4: Check whether the requested model is allowed.
     async def allowlist_stage(
         context: RequestContext,
     ) -> RequestContext:
         return await enforce_model_allowlist(context)
 
-    # Stage 5: Enforce the authenticated key's monthly budget.
     async def budget_stage(
         context: RequestContext,
     ) -> RequestContext:
@@ -200,11 +266,9 @@ async def chat_completions(
             usage_repository,
         )
 
-    # Stage 6: Call the provider and record actual usage.
     async def provider_call_stage(
         context: RequestContext,
     ) -> RequestContext:
-        # Load pricing only when the request reaches the provider stage.
         loaded_config = getattr(
             request.app.state,
             "loaded_config",
@@ -216,11 +280,29 @@ async def chat_completions(
                 "Gateway configuration is not loaded"
             )
 
-        model_pricing = loaded_config.model_pricing
-
         adapter = get_provider_adapter(request)
 
+        # Provider selection must happen before response headers are sent.
         context.provider_name = "alpha"
+
+        if context.stream:
+            context.model_resolved = context.model_requested
+
+            context.decision_trace.append(
+                "streaming provider alpha selected"
+            )
+
+            logger.info(
+                "Starting provider streaming request",
+                extra={
+                    "path": "/v1/chat/completions",
+                    "model": context.model_requested,
+                },
+            )
+
+            # The provider stream is consumed after the pipeline finishes.
+            return context
+
         context.decision_trace.append("provider alpha selected")
 
         logger.info(
@@ -235,7 +317,6 @@ async def chat_completions(
             context.request_payload
         )
 
-        # Save the normalized provider response.
         context.provider_response = result
         context.model_resolved = result.model
 
@@ -243,8 +324,7 @@ async def chat_completions(
             f"{result.model} response received"
         )
 
-        # Look up pricing using the actual provider-returned model.
-        pricing = model_pricing.get(result.model)
+        pricing = loaded_config.model_pricing.get(result.model)
 
         if pricing is None:
             raise UpstreamError(
@@ -252,7 +332,6 @@ async def chat_completions(
                 f"model '{result.model}'."
             )
 
-        # Calculate cost using provider-reported token usage.
         cost = CostCalculator.calculate(
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
@@ -261,16 +340,13 @@ async def chat_completions(
 
         context.cost_usd = cost
 
-        # Ensure authenticated key configuration is available.
         if context.key_config is None:
             raise UpstreamError(
                 "Authenticated key configuration is missing."
             )
 
-        # Determine the usage month from the request timestamp.
         month = context.start_time.strftime("%Y-%m")
 
-        # Persist usage in the database.
         usage_repository.record_usage(
             key_hash=context.key_config.key_hash,
             month=month,
@@ -285,7 +361,6 @@ async def chat_completions(
 
         return context
 
-    # Execute stages in the required order.
     stages = [
         auth_stage,
         validate_stage,
@@ -315,12 +390,43 @@ async def chat_completions(
         },
     )
 
+    # ---------------------------------------------------------
+    # Streaming response path
+    # ---------------------------------------------------------
+    if context.stream:
+        loaded_config = request.app.state.loaded_config
+        adapter = get_provider_adapter(request)
+
+        # Headers are finalized before StreamingResponse begins.
+        headers = build_streaming_headers(context)
+
+        provider_stream = adapter.stream(
+            context.request_payload
+        )
+
+        streaming_body = format_streaming_body(
+            provider_stream=provider_stream,
+            context=context,
+            usage_repository=usage_repository,
+            loaded_config=loaded_config,
+            adapter=adapter,
+        )
+
+        return StreamingResponse(
+            streaming_body,
+            status_code=200,
+            media_type="text/event-stream",
+            headers=headers,
+        )
+
+    # ---------------------------------------------------------
+    # Existing non-streaming response path
+    # ---------------------------------------------------------
     if context.provider_response is None:
         raise UpstreamError(
             "Pipeline completed without a provider response"
         )
 
-    # Set the actual calculated cost in the response headers.
     set_context_headers(response, context)
 
     logger.info(

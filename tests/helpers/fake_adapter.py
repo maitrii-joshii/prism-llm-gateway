@@ -1,3 +1,4 @@
+
 import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
@@ -35,6 +36,7 @@ class FakeProviderAdapter(ProviderAdapter):
         self.latency_seconds = latency_seconds
 
         self.call_count = 0
+        self.stream_call_count = 0
         self.last_request: dict[str, Any] | None = None
 
     async def complete(self, request: dict[str, Any]) -> ProviderResponse:
@@ -55,9 +57,73 @@ class FakeProviderAdapter(ProviderAdapter):
         self,
         request: dict[str, Any],
     ) -> AsyncIterator[dict[str, Any]]:
-        """Streaming is intentionally not implemented in this fake."""
+        """Yield canned OpenAI-compatible streaming chunks."""
 
-        raise NotImplementedError(
-            "Streaming is not implemented in FakeProviderAdapter"
-        )
-        yield {}
+        self.stream_call_count += 1
+        self.last_request = request
+
+        if self.error is not None:
+            raise self.error
+
+        content = self.response.content
+        model = self.response.model
+        stream_id = "fake-stream-001"
+
+        # Split the response into words to simulate incremental generation.
+        words = content.split(" ")
+
+        # Initial chunk: assistant role.
+        yield {
+            "id": stream_id,
+            "object": "chat.completion.chunk",
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant"},
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        # Content chunks: one word at a time.
+        for index, word in enumerate(words):
+            if self.latency_seconds > 0:
+                await asyncio.sleep(self.latency_seconds)
+
+            text = word if index == len(words) - 1 else f"{word} "
+
+            yield {
+                "id": stream_id,
+                "object": "chat.completion.chunk",
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": text},
+                        "finish_reason": None,
+                    }
+                ],
+            }
+
+        # Final chunk: usage information.
+        yield {
+            "id": stream_id,
+            "object": "chat.completion.chunk",
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": self.response.finish_reason,
+                }
+            ],
+            "usage": {
+                "prompt_tokens": self.response.prompt_tokens,
+                "completion_tokens": self.response.completion_tokens,
+                "total_tokens": self.response.total_tokens,
+            },
+        }
+
+        # OpenAI-compatible stream completion marker.
+        yield {"done": True}
