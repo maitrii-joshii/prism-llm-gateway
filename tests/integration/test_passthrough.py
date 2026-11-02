@@ -2,19 +2,31 @@
 
 import logging
 import re
+from datetime import datetime, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import Mock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from prism.adapters.sqlite_repos import hash_api_key
+from prism.adapters.sqlite_repos import (
+    SQLiteUsageRepository,
+    hash_api_key,
+    init_database,
+)
 from prism.adapters.system_clock import SystemClock
 from prism.api.error_handler import prism_error_handler
 from prism.api.middleware import request_id_middleware
 from prism.api.routes import router
 from prism.domain.errors import PrismError
-from prism.domain.models import VirtualKeyConfig
+from prism.domain.limiter import TokenBucketRateLimiter
+from prism.domain.models import (
+    GatewayConfig,
+    ModelPricing,
+    VirtualKeyConfig,
+)
 from tests.helpers.fake_adapter import FakeProviderAdapter
 
 
@@ -27,7 +39,17 @@ def client():
 
     app = FastAPI(title="Prism Integration Test")
 
+    # Initialize shared application dependencies.
     app.state.clock = SystemClock()
+    app.state.rate_limiter = TokenBucketRateLimiter(app.state.clock)
+
+    # Initialize a temporary SQLite database for usage tracking.
+    temp_dir = TemporaryDirectory()
+    database_path = Path(temp_dir.name) / "test_usage.db"
+
+    init_database(str(database_path))
+    app.state.usage_repository = SQLiteUsageRepository(str(database_path))
+    app.state.temp_dir = temp_dir
 
     key_config = VirtualKeyConfig(
         key_hash=hash_api_key(TEST_API_KEY),
@@ -45,6 +67,17 @@ def client():
 
     app.state.key_repository = key_repository
 
+    # Configure pricing for the model returned by the fake provider.
+    app.state.loaded_config = GatewayConfig(
+        model_pricing={
+            "fake-model": ModelPricing(
+                model_name="fake-model",
+                input_price_per_million=0.0,
+                output_price_per_million=0.0,
+            )
+        }
+    )
+
     app.middleware("http")(request_id_middleware)
 
     app.include_router(router)
@@ -60,6 +93,8 @@ def client():
 
     with TestClient(app) as test_client:
         yield test_client
+
+    temp_dir.cleanup()
 
 
 def assert_valid_request_id(response):
@@ -106,6 +141,77 @@ def test_valid_request_passes_through_to_fake_provider(client):
     adapter = client.app.state.fake_adapter
     assert adapter.call_count == 1
     assert adapter.last_request == payload
+
+    # Verify that successful provider usage was persisted.
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+
+    usage = client.app.state.usage_repository.get_usage(
+        key_hash=hash_api_key(TEST_API_KEY),
+        month=month,
+    )
+
+    assert usage.total_requests == 1
+    assert usage.total_tokens == 15
+    assert usage.total_spend_usd == 0.0
+
+
+def test_calculates_non_zero_cost_and_records_actual_usage(client):
+    """Cost uses provider-reported tokens and is persisted correctly."""
+
+    # Configure non-zero pricing for the provider-returned model.
+    client.app.state.loaded_config = GatewayConfig(
+        model_pricing={
+            "fake-model": ModelPricing(
+                model_name="fake-model",
+                input_price_per_million=2.0,
+                output_price_per_million=4.0,
+            )
+        }
+    )
+
+    # max_tokens is deliberately different from actual provider usage.
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "user", "content": "Calculate actual usage"}
+        ],
+        "max_tokens": 1000,
+    }
+
+    response = client.post(
+        "/v1/chat/completions",
+        json=payload,
+        headers={"x-api-key": TEST_API_KEY},
+    )
+
+    assert response.status_code == 200
+
+    # FakeProviderAdapter reports:
+    # prompt_tokens = 10
+    # completion_tokens = 5
+    # total_tokens = 15
+    expected_cost = ((10 * 2.0) + (5 * 4.0)) / 1_000_000
+
+    assert expected_cost == pytest.approx(0.00004)
+    assert response.headers["x-prism-cost-usd"] == "4e-05"
+
+    # Verify the calculated cost and actual token usage in SQLite.
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+
+    usage = client.app.state.usage_repository.get_usage(
+        key_hash=hash_api_key(TEST_API_KEY),
+        month=month,
+    )
+
+    assert usage.total_spend_usd == pytest.approx(expected_cost)
+    assert usage.total_tokens == 15
+    assert usage.total_requests == 1
+    assert usage.cache_hits == 0
+
+    # Verify the provider received the original request.
+    adapter = client.app.state.fake_adapter
+    assert adapter.call_count == 1
+    assert adapter.last_request["max_tokens"] == 1000
 
 
 def test_missing_api_key_returns_401(client):
@@ -191,8 +297,10 @@ def test_successful_request_logs_decision_trace(client, caplog):
     assert trace_record.levelno == logging.INFO
     assert "request validation ok" in trace_message
     assert "auth ok" in trace_message
+    assert "rate ok" in trace_message
     assert "provider alpha selected" in trace_message
     assert "fake-model response received" in trace_message
+    assert "cost: $0.000000" in trace_message
 
     assert trace_record.request_id == response.headers[
         "x-prism-request-id"

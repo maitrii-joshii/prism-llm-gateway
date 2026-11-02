@@ -46,7 +46,16 @@ def write_json(directory, filename, data):
 def test_loads_all_sample_configuration(temporary_config):
     config = load_configuration(temporary_config)
 
-    assert len(config.seed_keys) == 1
+    # Both the original key and demo key should be loaded.
+    assert len(config.seed_keys) == 2
+
+    # Verify the configured RPM limits.
+    rate_limits = {
+        key.rate_limit_rpm for key in config.seed_keys
+    }
+
+    assert rate_limits == {10, 60}
+
     assert len(config.model_pricing) == 2
     assert "fast" in config.gateway_config.aliases
 
