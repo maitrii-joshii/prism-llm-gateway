@@ -97,6 +97,17 @@ class UsageRecord(BaseModel):
     created_at: datetime
 
 
+class MonthlyUsage(BaseModel):
+    """Aggregated usage for one virtual key in one calendar month."""
+
+    key_hash: str
+    month: str
+    total_spend_usd: float = Field(ge=0)
+    total_tokens: int = Field(ge=0)
+    total_requests: int = Field(ge=0)
+    cache_hits: int = Field(ge=0)
+
+
 __all__ = [
     "VirtualKeyConfig",
     "RequestContext",
@@ -105,4 +116,5 @@ __all__ = [
     "GatewayConfig",
     "AliasConfig",
     "UsageRecord",
+    "MonthlyUsage",
 ]

@@ -1,7 +1,11 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from prism.domain.models import UsageRecord, VirtualKeyConfig
+from prism.domain.models import (
+    MonthlyUsage,
+    UsageRecord,
+    VirtualKeyConfig,
+)
 
 
 class KeyRepository(ABC):
@@ -34,13 +38,17 @@ class UsageRepository(ABC):
         ...
 
     @abstractmethod
-    def get_usage(self, key_hash: str, month: str) -> UsageRecord:
-        """Return usage for a key and month."""
+    def get_usage(
+        self,
+        key_hash: str,
+        month: str,
+    ) -> MonthlyUsage:
+        """Return monthly usage for a key and month."""
         ...
 
     @abstractmethod
-    def get_all_usage(self, month: str) -> list[UsageRecord]:
-        """Return usage records for all keys in a month."""
+    def get_all_usage(self, month: str) -> list[MonthlyUsage]:
+        """Return monthly usage records for all keys in a month."""
         ...
 
 

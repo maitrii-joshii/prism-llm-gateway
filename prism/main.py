@@ -9,20 +9,22 @@ from fastapi.responses import JSONResponse
 
 from prism.adapters.sqlite_repos import (
     SQLiteKeyRepository,
+    SQLiteUsageRepository,
     init_database,
 )
+from prism.adapters.system_clock import SystemClock
 from prism.api.middleware import request_id_middleware
 from prism.api.routes import router
-from prism.config.loader import load_configuration
 from prism.config.logging import (
     configure_logging,
     get_logger,
     get_uvicorn_logging_config,
 )
 from prism.config.settings import PROJECT_ROOT
+from prism.config.loader import load_configuration
 from prism.domain.errors import PrismError
+from prism.domain.limiter import TokenBucketRateLimiter
 from prism.services.pipeline import Pipeline
-
 
 logger = get_logger(__name__)
 
@@ -43,15 +45,24 @@ async def lifespan(app: FastAPI):
     # 3. Create the database and its tables.
     init_database(database_path)
 
-    # 4. Create the key repository and seed virtual keys.
+    # 4. Initialize repositories.
     key_repository = SQLiteKeyRepository(database_path)
     key_repository.seed_keys(loaded_config.seed_keys)
 
-    # 5. Make resources available to API routes.
+    usage_repository = SQLiteUsageRepository(database_path)
+
+    # 5. Initialize the shared clock and rate limiter.
+    clock = SystemClock()
+    rate_limiter = TokenBucketRateLimiter(clock)
+
+    # 6. Make resources available to API routes.
     app.state.loaded_config = loaded_config
     app.state.key_repository = key_repository
+    app.state.usage_repository = usage_repository
     app.state.database_path = database_path
     app.state.pipeline = Pipeline()
+    app.state.clock = clock
+    app.state.rate_limiter = rate_limiter
 
     logger.info("Prism startup initialization completed")
 

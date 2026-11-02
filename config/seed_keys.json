@@ -11,5 +11,18 @@
     "cache_enabled": true,
     "cache_threshold": 0.8,
     "status": "active"
-  }
+  },
+
+  {
+    "key": "prism-demo-rate-limit-10",
+    "tenant_id": "tenant-demo",
+    "budget_usd": 100.0,
+    "rate_limit_rpm": 10,
+    "model_allowlist": [
+      "gpt-4o-mini"
+    ],
+    "cache_enabled": false,
+    "cache_threshold": 0.8,
+    "status": "active"
+ }
 ]

@@ -7,11 +7,15 @@ from uuid import uuid4
 from fastapi import APIRouter, Request, Response
 
 from prism.config.logging import get_logger
+from prism.domain.cost import CostCalculator
 from prism.domain.errors import InvalidRequestError, UpstreamError
 from prism.domain.models import ProviderResponse, RequestContext
 from prism.ports.provider import ProviderAdapter
 from prism.services.pipeline import Pipeline
 from prism.services.stages.auth import authenticate_request
+from prism.services.stages.allowlist import enforce_model_allowlist
+from prism.services.stages.budget import enforce_budget
+from prism.services.stages.rate_limiter import enforce_rate_limit
 from prism.services.stages.validate import validate_request
 
 router = APIRouter()
@@ -87,7 +91,6 @@ async def chat_completions(
 ) -> Any:
     """Process a chat completion request through the pipeline."""
 
-    # Retrieve the key repository.
     key_repository = getattr(
         request.app.state,
         "key_repository",
@@ -97,13 +100,29 @@ async def chat_completions(
     if key_repository is None:
         raise UpstreamError("Key repository is not configured")
 
-    # Retrieve the clock.
     clock = getattr(request.app.state, "clock", None)
 
     if clock is None:
         raise UpstreamError("Clock is not configured")
 
-    # Create context before validation so validation runs as a pipeline stage.
+    rate_limiter = getattr(
+        request.app.state,
+        "rate_limiter",
+        None,
+    )
+
+    if rate_limiter is None:
+        raise UpstreamError("Rate limiter is not configured")
+
+    usage_repository = getattr(
+        request.app.state,
+        "usage_repository",
+        None,
+    )
+
+    if usage_repository is None:
+        raise UpstreamError("Usage repository is not configured")
+
     initial_model = payload.get("model", "")
     initial_messages = payload.get("messages", [])
 
@@ -153,15 +172,52 @@ async def chat_completions(
         context.messages = validated_payload["messages"]
         context.stream = stream
 
-        # Preserve the original validation trace entry.
         context.decision_trace.append("request validation ok")
 
         return context
 
-    # Stage 3: Call the selected provider.
+    # Stage 3: Enforce the authenticated key's rate limit.
+    async def rate_limit_stage(
+        context: RequestContext,
+    ) -> RequestContext:
+        return await enforce_rate_limit(
+            context,
+            rate_limiter,
+        )
+
+    # Stage 4: Check whether the requested model is allowed.
+    async def allowlist_stage(
+        context: RequestContext,
+    ) -> RequestContext:
+        return await enforce_model_allowlist(context)
+
+    # Stage 5: Enforce the authenticated key's monthly budget.
+    async def budget_stage(
+        context: RequestContext,
+    ) -> RequestContext:
+        return await enforce_budget(
+            context,
+            usage_repository,
+        )
+
+    # Stage 6: Call the provider and record actual usage.
     async def provider_call_stage(
         context: RequestContext,
     ) -> RequestContext:
+        # Load pricing only when the request reaches the provider stage.
+        loaded_config = getattr(
+            request.app.state,
+            "loaded_config",
+            None,
+        )
+
+        if loaded_config is None:
+            raise UpstreamError(
+                "Gateway configuration is not loaded"
+            )
+
+        model_pricing = loaded_config.model_pricing
+
         adapter = get_provider_adapter(request)
 
         context.provider_name = "alpha"
@@ -179,6 +235,7 @@ async def chat_completions(
             context.request_payload
         )
 
+        # Save the normalized provider response.
         context.provider_response = result
         context.model_resolved = result.model
 
@@ -186,18 +243,55 @@ async def chat_completions(
             f"{result.model} response received"
         )
 
+        # Look up pricing using the actual provider-returned model.
+        pricing = model_pricing.get(result.model)
+
+        if pricing is None:
+            raise UpstreamError(
+                f"No pricing configured for provider-returned "
+                f"model '{result.model}'."
+            )
+
+        # Calculate cost using provider-reported token usage.
+        cost = CostCalculator.calculate(
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            model_pricing=pricing,
+        )
+
+        context.cost_usd = cost
+
+        # Ensure authenticated key configuration is available.
+        if context.key_config is None:
+            raise UpstreamError(
+                "Authenticated key configuration is missing."
+            )
+
+        # Determine the usage month from the request timestamp.
+        month = context.start_time.strftime("%Y-%m")
+
+        # Persist usage in the database.
+        usage_repository.record_usage(
+            key_hash=context.key_config.key_hash,
+            month=month,
+            cost=cost,
+            tokens=result.total_tokens,
+            is_cache_hit=context.cache_status == "hit",
+        )
+
+        context.decision_trace.append(
+            f"cost: ${cost:.6f}"
+        )
+
         return context
 
-    # Define the ordered pipeline.
+    # Execute stages in the required order.
     stages = [
         auth_stage,
         validate_stage,
-        # Future stages:
-        # rate_limit_stage,
-        # resolve_model_stage,
-        # allowlist_stage,
-        # budget_stage,
-        # cache_stage,
+        rate_limit_stage,
+        allowlist_stage,
+        budget_stage,
         provider_call_stage,
     ]
 
@@ -207,7 +301,6 @@ async def chat_completions(
         None,
     ) or Pipeline()
 
-    # Execute all stages sequentially.
     context = await pipeline.run(
         context,
         stages=stages,
@@ -227,7 +320,7 @@ async def chat_completions(
             "Pipeline completed without a provider response"
         )
 
-    # Add response metadata.
+    # Set the actual calculated cost in the response headers.
     set_context_headers(response, context)
 
     logger.info(

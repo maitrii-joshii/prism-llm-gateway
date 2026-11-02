@@ -5,14 +5,15 @@ import sqlite3
 from pathlib import Path
 from typing import Union
 
+from prism.domain.models import MonthlyUsage, VirtualKeyConfig
 from prism.domain.security import hash_api_key
-from prism.domain.models import VirtualKeyConfig
-from prism.ports.repositories import KeyRepository
+from prism.ports.repositories import KeyRepository, UsageRepository
 
 
 DatabasePath = Union[str, Path]
 
 BUSY_TIMEOUT_MS = 5000
+
 
 def create_tables(connection: sqlite3.Connection) -> None:
     """Create all Prism database tables if they do not already exist."""
@@ -198,6 +199,157 @@ class SQLiteKeyRepository(KeyRepository):
         except Exception:
             connection.rollback()
             raise
+
+        finally:
+            connection.close()
+
+
+class SQLiteUsageRepository(UsageRepository):
+    """SQLite implementation of monthly usage tracking."""
+
+    def __init__(self, database_path: DatabasePath) -> None:
+        self.database_path = database_path
+
+    def record_usage(
+        self,
+        key_hash: str,
+        month: str,
+        cost: float,
+        tokens: int,
+        is_cache_hit: bool,
+    ) -> None:
+        """Atomically record usage for a key and calendar month."""
+
+        if cost < 0:
+            raise ValueError("cost cannot be negative.")
+
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
+            raise ValueError("tokens must be a non-negative integer.")
+
+        if not isinstance(is_cache_hit, bool):
+            raise ValueError("is_cache_hit must be a boolean.")
+
+        connection = get_connection(self.database_path)
+
+        try:
+            connection.execute(
+                """
+                INSERT INTO usage (
+                    key_hash,
+                    month,
+                    total_spend_usd,
+                    total_tokens,
+                    total_requests,
+                    cache_hits
+                )
+                VALUES (?, ?, ?, ?, 1, ?)
+                ON CONFLICT(key_hash, month)
+                DO UPDATE SET
+                    total_spend_usd =
+                        total_spend_usd + excluded.total_spend_usd,
+                    total_tokens =
+                        total_tokens + excluded.total_tokens,
+                    total_requests = total_requests + 1,
+                    cache_hits = cache_hits + excluded.cache_hits
+                """,
+                (
+                    key_hash,
+                    month,
+                    cost,
+                    tokens,
+                    int(is_cache_hit),
+                ),
+            )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+        finally:
+            connection.close()
+
+    def get_usage(
+        self,
+        key_hash: str,
+        month: str,
+    ) -> MonthlyUsage:
+        """Return monthly usage, or zero totals if no row exists."""
+
+        connection = get_connection(self.database_path)
+
+        try:
+            row = connection.execute(
+                """
+                SELECT
+                    key_hash,
+                    month,
+                    total_spend_usd,
+                    total_tokens,
+                    total_requests,
+                    cache_hits
+                FROM usage
+                WHERE key_hash = ? AND month = ?
+                """,
+                (key_hash, month),
+            ).fetchone()
+
+            if row is None:
+                return MonthlyUsage(
+                    key_hash=key_hash,
+                    month=month,
+                    total_spend_usd=0.0,
+                    total_tokens=0,
+                    total_requests=0,
+                    cache_hits=0,
+                )
+
+            return MonthlyUsage(
+                key_hash=row[0],
+                month=row[1],
+                total_spend_usd=row[2],
+                total_tokens=row[3],
+                total_requests=row[4],
+                cache_hits=row[5],
+            )
+
+        finally:
+            connection.close()
+
+    def get_all_usage(self, month: str) -> list[MonthlyUsage]:
+        """Return monthly usage for every key with recorded usage."""
+
+        connection = get_connection(self.database_path)
+
+        try:
+            rows = connection.execute(
+                """
+                SELECT
+                    key_hash,
+                    month,
+                    total_spend_usd,
+                    total_tokens,
+                    total_requests,
+                    cache_hits
+                FROM usage
+                WHERE month = ?
+                ORDER BY key_hash
+                """,
+                (month,),
+            ).fetchall()
+
+            return [
+                MonthlyUsage(
+                    key_hash=row[0],
+                    month=row[1],
+                    total_spend_usd=row[2],
+                    total_tokens=row[3],
+                    total_requests=row[4],
+                    cache_hits=row[5],
+                )
+                for row in rows
+            ]
 
         finally:
             connection.close()
