@@ -1,5 +1,10 @@
-"""Integration tests for the Prism streaming HTTP endpoint."""
+"""Integration tests for the Prism streaming HTTP endpoint.
 
+Covers SSE responses, usage persistence, completion markers,
+non-streaming compatibility, and upstream stream idle timeouts.
+"""
+
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -30,6 +35,35 @@ from tests.helpers.fake_adapter import FakeProviderAdapter
 
 
 TEST_API_KEY = "streaming-integration-test-key"
+
+
+class IdleTimeoutFakeProviderAdapter(FakeProviderAdapter):
+    """Fake provider that sends usage and then becomes idle."""
+
+    async def stream(self, request):
+        self.stream_call_count += 1
+        self.last_request = request
+
+        yield {
+            "id": "fake-stream-timeout",
+            "object": "chat.completion.chunk",
+            "model": "fake-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": None,
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+            },
+        }
+
+        # Simulate a provider that stops sending chunks.
+        await asyncio.sleep(1)
 
 
 def create_test_app():
@@ -249,3 +283,56 @@ async def test_non_streaming_request_still_returns_json(client, app):
 
     assert app.state.fake_adapter.call_count == 1
     assert app.state.fake_adapter.stream_call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_streaming_idle_timeout_returns_error_and_records_usage(
+    client,
+    app,
+    monkeypatch,
+):
+    """An idle provider stream returns an SSE error and persists usage."""
+
+    monkeypatch.setenv("PRISM_STREAM_IDLE_TIMEOUT", "0.05")
+
+    idle_adapter = IdleTimeoutFakeProviderAdapter()
+
+    app.state.provider_adapter = idle_adapter
+    app.state.fake_adapter = idle_adapter
+
+    async with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json=valid_payload(stream=True),
+        headers={"x-api-key": TEST_API_KEY},
+    ) as response:
+        assert response.status_code == 200
+
+        assert response.headers["content-type"].startswith(
+            "text/event-stream"
+        )
+
+        body = await response.aread()
+
+    # Verify that the client receives an SSE error event.
+    assert b"event: error" in body
+    assert b"upstream_error" in body
+    assert b"idle timeout" in body
+
+    # Verify that the provider was called.
+    assert idle_adapter.stream_call_count == 1
+
+    # Verify that usage was persisted despite the idle timeout.
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+
+    usage = app.state.usage_repository.get_usage(
+        key_hash=hash_api_key(TEST_API_KEY),
+        month=month,
+    )
+
+    assert usage.total_requests == 1
+    assert usage.total_tokens == 15
+
+    expected_cost = ((10 * 2.0) + (5 * 4.0)) / 1_000_000
+
+    assert usage.total_spend_usd == pytest.approx(expected_cost)

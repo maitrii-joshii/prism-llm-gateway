@@ -41,6 +41,12 @@ class RequestContext(BaseModel):
     model_resolved: str | None = None
     provider_name: str | None = None
 
+    # Ordered models: primary model followed by permitted fallbacks.
+    model_candidates: list[str] = Field(default_factory=list)
+
+    # Total number of retry attempts performed by the executor.
+    retry_count: int = Field(default=0, ge=0)
+
     messages: list[dict[str, Any]] = Field(default_factory=list)
     stream: bool = False
 

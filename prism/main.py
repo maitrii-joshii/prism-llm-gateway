@@ -21,7 +21,7 @@ from prism.config.logging import (
     get_logger,
     get_uvicorn_logging_config,
 )
-from prism.config.settings import PROJECT_ROOT
+from prism.config.settings import PROJECT_ROOT, Settings
 from prism.config.loader import load_configuration
 from prism.domain.errors import PrismError
 from prism.domain.limiter import TokenBucketRateLimiter
@@ -32,134 +32,130 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize application resources when Prism starts."""
-
-    # 1. Load and validate configuration files.
+    # Load application settings and gateway configuration.
+    settings = Settings.from_env()
     loaded_config = load_configuration()
 
-    # 2. Resolve the SQLite database location.
+    # Initialize database.
     database_path = os.getenv(
         "PRISM_DB_PATH",
         str(PROJECT_ROOT / "data" / "prism.db"),
     )
 
-    # 3. Create the database and its tables.
     init_database(database_path)
 
-    # 4. Initialize repositories.
     key_repository = SQLiteKeyRepository(database_path)
     key_repository.seed_keys(loaded_config.seed_keys)
 
     usage_repository = SQLiteUsageRepository(database_path)
 
-    # 5. Initialize the shared clock and rate limiter.
+    # Initialize shared services.
     clock = SystemClock()
     rate_limiter = TokenBucketRateLimiter(clock)
 
-    # 6. Initialize the Alpha provider adapter.
-    alpha_provider_url = os.getenv("ALPHA_PROVIDER_URL")
-    alpha_provider_key = os.getenv("ALPHA_PROVIDER_KEY")
+    # Validate provider credentials.
+    if not settings.openai_api_key:
+        raise RuntimeError(
+            "OPENAI_API_KEY is missing. Add it to your .env file."
+        )
 
-    if not alpha_provider_url:
-        raise RuntimeError("ALPHA_PROVIDER_URL environment variable is required")
+    if not settings.groq_api_key:
+        raise RuntimeError(
+            "GROQ_API_KEY is missing. Add it to your .env file."
+        )
 
-    if not alpha_provider_key:
-        raise RuntimeError("ALPHA_PROVIDER_KEY environment variable is required")
-
-    provider_adapter = OpenAICompatibleProvider(
-        base_url=alpha_provider_url,
-        api_key=alpha_provider_key,
-        timeout=loaded_config.gateway_config.provider_timeout_seconds,
+    # Initialize OpenAI provider.
+    openai_provider = OpenAICompatibleProvider(
+        base_url=settings.openai_base_url,
+        api_key=settings.openai_api_key,
+        connect_timeout=settings.connect_timeout_seconds,
+        request_timeout=settings.provider_timeout_seconds,
     )
 
-    # 7. Make resources available to API routes.
+    # Initialize Groq provider.
+    groq_provider = OpenAICompatibleProvider(
+        base_url=settings.groq_base_url,
+        api_key=settings.groq_api_key,
+        connect_timeout=settings.connect_timeout_seconds,
+        request_timeout=settings.provider_timeout_seconds,
+    )
+
+    # Map model names to their respective provider adapters.
+    provider_adapters = {
+        "gpt-4o-mini": openai_provider,
+        "llama-3.3-70b-versatile": groq_provider,
+    }
+
+    # Store application dependencies.
     app.state.loaded_config = loaded_config
+    app.state.settings = settings
+
     app.state.key_repository = key_repository
     app.state.usage_repository = usage_repository
     app.state.database_path = database_path
+
     app.state.pipeline = Pipeline()
     app.state.clock = clock
     app.state.rate_limiter = rate_limiter
-    app.state.provider_adapter = provider_adapter
 
-    logger.info("Prism startup initialization completed")
+    # New multi-provider configuration.
+    app.state.provider_adapters = provider_adapters
+
+    # Keep the old single-provider reference for existing tests
+    # and backward compatibility.
+    app.state.provider_adapter = openai_provider
+
+    logger.info(
+        "Prism initialized successfully",
+        extra={
+            "database_path": database_path,
+            "providers": ["openai", "groq"],
+            "max_retries": settings.max_retries,
+            "connect_timeout": settings.connect_timeout_seconds,
+            "request_timeout": settings.provider_timeout_seconds,
+        },
+    )
 
     yield
 
     logger.info("Prism application shutting down")
 
 
-def create_app() -> FastAPI:
-    """Create and configure the Prism FastAPI application."""
+app = FastAPI(
+    title="Prism LLM Gateway",
+    lifespan=lifespan,
+)
 
-    configure_logging()
+app.middleware("http")(request_id_middleware)
 
-    app = FastAPI(
-        title="Prism LLM Gateway",
-        version="0.1.0",
-        lifespan=lifespan,
+
+@app.exception_handler(PrismError)
+async def prism_error_handler(
+    request: Request,
+    exc: PrismError,
+):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": {
+                "message": exc.message,
+                "type": exc.error_type,
+                "code": exc.code,
+            }
+        },
     )
 
-    # Register request ID and structured logging middleware.
-    app.middleware("http")(request_id_middleware)
 
-    # Register API routes.
-    app.include_router(router)
-
-    @app.exception_handler(PrismError)
-    async def prism_error_handler(
-        request: Request,
-        exc: PrismError,
-    ) -> JSONResponse:
-        """Convert Prism errors into structured JSON responses."""
-
-        logger.error(
-            "Prism request failed",
-            extra={
-                "path": request.url.path,
-                "method": request.method,
-                "status_code": exc.status_code,
-                "error_type": exc.error_type,
-            },
-        )
-
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={
-                "error": {
-                    "message": exc.message,
-                    "type": exc.error_type,
-                    "code": exc.status_code,
-                }
-            },
-        )
-
-    @app.get("/health")
-    async def health() -> dict[str, str]:
-        """Return the gateway health status."""
-
-        return {"status": "ok"}
-
-    return app
-
-
-app = create_app()
-
-
-def main() -> None:
-    """Start the Prism HTTP server."""
-
-    port = int(os.getenv("PORT", "3000"))
-
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=port,
-        reload=False,
-        log_config=get_uvicorn_logging_config(),
-        access_log=False,
-    )
+app.include_router(router)
 
 
 if __name__ == "__main__":
-    main()
+    configure_logging()
+
+    uvicorn.run(
+        "prism.main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "3000")),
+        log_config=get_uvicorn_logging_config(),
+        reload=True,
+    )

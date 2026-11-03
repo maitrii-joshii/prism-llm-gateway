@@ -1,3 +1,10 @@
+"""Unit tests for the Prism LLM Gateway streaming proxy.
+
+Covers immediate chunk forwarding, usage recording, provider errors,
+client disconnects, cleanup, and idle timeout handling.
+"""
+
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -217,3 +224,50 @@ async def test_cleanup_runs_when_usage_is_unavailable(
     assert len(chunks) == 1
 
     usage_repository.record_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_usage_is_recorded_when_stream_idle_timeout_occurs(
+    context,
+    config,
+    usage_repository,
+    adapter,
+    monkeypatch,
+):
+    # Use a short timeout to keep the test fast.
+    monkeypatch.setenv("PRISM_STREAM_IDLE_TIMEOUT", "0.05")
+
+    async def provider_stream():
+        # Send usage first.
+        yield make_usage_chunk()
+
+        # Simulate a provider that stops sending chunks.
+        await asyncio.sleep(1)
+
+    chunks = [
+        chunk
+        async for chunk in stream_response(
+            provider_stream(),
+            context,
+            usage_repository,
+            config,
+            adapter,
+        )
+    ]
+
+    # Verify that an SSE error event is sent.
+    assert any("event: error" in chunk for chunk in chunks)
+
+    # Verify that the error identifies an upstream timeout.
+    assert any("upstream_error" in chunk for chunk in chunks)
+
+    # Verify that usage is recorded despite the timeout.
+    usage_repository.record_usage.assert_called_once()
+
+    assert context.cost_usd == pytest.approx(0.00004)
+
+    # Verify that the timeout is recorded in the decision trace.
+    assert any(
+        "stream idle timeout" in entry
+        for entry in context.decision_trace
+    )
