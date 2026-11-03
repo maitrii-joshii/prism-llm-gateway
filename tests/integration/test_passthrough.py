@@ -67,14 +67,20 @@ def client():
 
     app.state.key_repository = key_repository
 
-    # Configure pricing for the model returned by the fake provider.
+    # Configure pricing for both the requested model and
+    # the model returned by the fake provider.
     app.state.loaded_config = GatewayConfig(
         model_pricing={
+            "gpt-4o-mini": ModelPricing(
+                model_name="gpt-4o-mini",
+                input_price_per_million=0.0,
+                output_price_per_million=0.0,
+            ),
             "fake-model": ModelPricing(
                 model_name="fake-model",
                 input_price_per_million=0.0,
                 output_price_per_million=0.0,
-            )
+            ),
         }
     )
 
@@ -158,14 +164,20 @@ def test_valid_request_passes_through_to_fake_provider(client):
 def test_calculates_non_zero_cost_and_records_actual_usage(client):
     """Cost uses provider-reported tokens and is persisted correctly."""
 
-    # Configure non-zero pricing for the provider-returned model.
+    # Configure pricing for both the requested model and
+    # the provider-returned model.
     client.app.state.loaded_config = GatewayConfig(
         model_pricing={
+            "gpt-4o-mini": ModelPricing(
+                model_name="gpt-4o-mini",
+                input_price_per_million=0.0,
+                output_price_per_million=0.0,
+            ),
             "fake-model": ModelPricing(
                 model_name="fake-model",
                 input_price_per_million=2.0,
                 output_price_per_million=4.0,
-            )
+            ),
         }
     )
 
@@ -298,7 +310,7 @@ def test_successful_request_logs_decision_trace(client, caplog):
     assert "request validation ok" in trace_message
     assert "auth ok" in trace_message
     assert "rate ok" in trace_message
-    assert "provider alpha selected" in trace_message
+    assert "legacy single provider selected" in trace_message
     assert "fake-model response received" in trace_message
     assert "cost: $0.000000" in trace_message
 
@@ -321,9 +333,7 @@ def test_missing_model_returns_400(client):
     )
 
     assert response.status_code == 400
-    assert response.json()["error"]["type"] == (
-        "invalid_request"
-    )
+    assert response.json()["error"]["type"] == "invalid_request"
     assert_valid_request_id(response)
 
     assert client.app.state.fake_adapter.call_count == 0

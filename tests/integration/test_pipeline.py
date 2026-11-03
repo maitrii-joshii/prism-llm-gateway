@@ -63,14 +63,20 @@ def create_test_client(
 
     app.state.key_repository = key_repository
 
-    # Configure pricing for the model returned by the fake provider.
+    # Configure pricing for both the requested model and
+    # the model returned by the fake provider.
     app.state.loaded_config = GatewayConfig(
         model_pricing={
+            "gpt-4o-mini": ModelPricing(
+                model_name="gpt-4o-mini",
+                input_price_per_million=0.0,
+                output_price_per_million=0.0,
+            ),
             "fake-model": ModelPricing(
                 model_name="fake-model",
                 input_price_per_million=0.0,
                 output_price_per_million=0.0,
-            )
+            ),
         }
     )
 
@@ -238,16 +244,17 @@ def test_pipeline_rejects_disabled_api_key(disabled_key_client):
     assert disabled_key_client.app.state.fake_adapter.call_count == 0
 
 
-# -------------------------------------------------------------------
-# Request validation tests
-# -------------------------------------------------------------------
-
-
 def test_pipeline_rejects_missing_model(client):
-    """The validation stage rejects a request without a model."""
+    """The pipeline rejects a request without a model."""
 
-    payload = valid_payload()
-    payload.pop("model")
+    payload = {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Hello, Prism!",
+            }
+        ]
+    }
 
     response = client.post(
         "/v1/chat/completions",
@@ -262,10 +269,12 @@ def test_pipeline_rejects_missing_model(client):
 
 
 def test_pipeline_rejects_empty_messages(client):
-    """The validation stage rejects an empty messages array."""
+    """The pipeline rejects an empty messages list."""
 
-    payload = valid_payload()
-    payload["messages"] = []
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [],
+    }
 
     response = client.post(
         "/v1/chat/completions",
@@ -280,10 +289,18 @@ def test_pipeline_rejects_empty_messages(client):
 
 
 def test_pipeline_rejects_invalid_max_tokens(client):
-    """The validation stage rejects invalid max_tokens."""
+    """The pipeline rejects invalid max_tokens."""
 
-    payload = valid_payload()
-    payload["max_tokens"] = -1
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Hello, Prism!",
+            }
+        ],
+        "max_tokens": -1,
+    }
 
     response = client.post(
         "/v1/chat/completions",

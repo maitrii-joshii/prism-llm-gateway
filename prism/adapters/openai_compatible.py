@@ -1,4 +1,7 @@
+"""Adapter for providers exposing the OpenAI chat completions API."""
+
 from collections.abc import AsyncIterator
+
 import json
 from typing import Any
 
@@ -16,22 +19,55 @@ class OpenAICompatibleProvider(ProviderAdapter):
         self,
         base_url: str,
         api_key: str,
-        timeout: float = 30.0,
+        timeout: float | None = 30.0,
         client: httpx.AsyncClient | None = None,
+        *,
+        connect_timeout: float | None = None,
+        request_timeout: float | None = None,
     ) -> None:
         if not base_url.strip():
             raise ValueError("base_url cannot be empty")
 
-        if timeout <= 0:
-            raise ValueError("timeout must be positive")
+        # Preserve the old timeout argument for backward compatibility.
+        effective_connect_timeout = (
+            connect_timeout if connect_timeout is not None else timeout
+        )
+        effective_request_timeout = (
+            request_timeout if request_timeout is not None else timeout
+        )
+
+        if effective_connect_timeout is None or effective_connect_timeout <= 0:
+            raise ValueError("connect_timeout must be positive")
+
+        if effective_request_timeout is None or effective_request_timeout <= 0:
+            raise ValueError("request_timeout must be positive")
 
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
-        self.timeout = timeout
-        self.client = client
 
-        # Stores usage information received in the final SSE data chunk.
+        self.connect_timeout = effective_connect_timeout
+        self.request_timeout = effective_request_timeout
+
+        # Keep the legacy attribute available.
+        self.timeout = self.request_timeout
+
+        self.http_timeout = httpx.Timeout(
+            connect=self.connect_timeout,
+            read=self.request_timeout,
+            write=self.request_timeout,
+            pool=self.connect_timeout,
+        )
+
+        self.client = client
         self.last_stream_usage: dict[str, int] | None = None
+
+    def _completion_url(self) -> str:
+        """Build the chat completion URL without duplicating /v1."""
+
+        if self.base_url.endswith("/v1"):
+            return f"{self.base_url}/chat/completions"
+
+        return f"{self.base_url}/v1/chat/completions"
 
     def _build_headers(self) -> dict[str, str]:
         """Build common headers for provider requests."""
@@ -44,33 +80,34 @@ class OpenAICompatibleProvider(ProviderAdapter):
     async def complete(self, request: dict[str, Any]) -> ProviderResponse:
         """Send a chat completion request and normalize the response."""
 
-        url = f"{self.base_url}/v1/chat/completions"
+        url = self._completion_url()
         headers = self._build_headers()
 
         try:
             if self.client is None:
                 async with httpx.AsyncClient(
-                    timeout=self.timeout
+                    timeout=self.http_timeout
                 ) as client:
                     response = await client.post(
                         url,
                         headers=headers,
                         json=request,
-                        timeout=self.timeout,
+                        timeout=self.http_timeout,
                     )
             else:
                 response = await self.client.post(
                     url,
                     headers=headers,
                     json=request,
-                    timeout=self.timeout,
+                    timeout=self.http_timeout,
                 )
 
             response.raise_for_status()
 
         except httpx.TimeoutException as exc:
             raise UpstreamError(
-                f"Provider request timed out after {self.timeout} seconds"
+                f"Provider request timed out after "
+                f"{self.request_timeout} seconds"
             ) from exc
 
         except httpx.HTTPStatusError as exc:
@@ -116,10 +153,9 @@ class OpenAICompatibleProvider(ProviderAdapter):
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream parsed SSE events from the provider without buffering."""
 
-        url = f"{self.base_url}/v1/chat/completions"
+        url = self._completion_url()
         headers = self._build_headers()
 
-        # Ensure the provider receives a streaming request.
         stream_request = {
             **request,
             "stream": True,
@@ -134,14 +170,14 @@ class OpenAICompatibleProvider(ProviderAdapter):
         try:
             if self.client is None:
                 async with httpx.AsyncClient(
-                    timeout=self.timeout
+                    timeout=self.http_timeout
                 ) as client:
                     async with client.stream(
                         "POST",
                         url,
                         headers=headers,
                         json=stream_request,
-                        timeout=self.timeout,
+                        timeout=self.http_timeout,
                     ) as response:
                         async for event in self._read_sse_events(response):
                             yield event
@@ -151,14 +187,15 @@ class OpenAICompatibleProvider(ProviderAdapter):
                     url,
                     headers=headers,
                     json=stream_request,
-                    timeout=self.timeout,
+                    timeout=self.http_timeout,
                 ) as response:
                     async for event in self._read_sse_events(response):
                         yield event
 
         except httpx.TimeoutException as exc:
             raise UpstreamError(
-                f"Provider streaming timed out after {self.timeout} seconds"
+                f"Provider streaming timed out after "
+                f"{self.request_timeout} seconds"
             ) from exc
 
         except httpx.HTTPStatusError as exc:
@@ -180,17 +217,14 @@ class OpenAICompatibleProvider(ProviderAdapter):
         response.raise_for_status()
 
         async for line in response.aiter_lines():
-            # Ignore blank lines and SSE comments.
             if not line or line.startswith(":"):
                 continue
 
-            # Only process SSE data fields.
             if not line.startswith("data:"):
                 continue
 
             data = line[len("data:"):].strip()
 
-            # The provider has finished sending its response.
             if data == "[DONE]":
                 yield {"done": True}
                 return
@@ -202,7 +236,6 @@ class OpenAICompatibleProvider(ProviderAdapter):
                     "Provider returned an invalid streaming response"
                 ) from exc
 
-            # Extract usage from the final usage chunk.
             usage = event.get("usage")
 
             if isinstance(usage, dict):
@@ -214,5 +247,4 @@ class OpenAICompatibleProvider(ProviderAdapter):
                     "total_tokens": usage.get("total_tokens", 0),
                 }
 
-            # Yield immediately; do not collect the complete response.
             yield event

@@ -1,3 +1,5 @@
+"""Unit tests for the OpenAI-compatible provider adapter."""
+
 import json
 from unittest.mock import AsyncMock
 
@@ -49,6 +51,11 @@ def make_sse_response(events: list[str]) -> httpx.Response:
     )
 
 
+# ---------------------------------------------------------------------
+# Non-streaming completion tests
+# ---------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
 async def test_complete_parses_provider_response() -> None:
     expected_body = {
@@ -73,6 +80,7 @@ async def test_complete_parses_provider_response() -> None:
             "test-api-key",
             client=client,
         )
+
         result = await provider.complete(expected_body)
 
     assert result.content == "Hello from the mock provider!"
@@ -146,7 +154,7 @@ async def test_timeout_raises_upstream_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_configured_timeout_is_passed_to_client() -> None:
+async def test_configured_timeouts_are_passed_to_client() -> None:
     client = AsyncMock(spec=httpx.AsyncClient)
 
     request = httpx.Request(
@@ -163,7 +171,8 @@ async def test_configured_timeout_is_passed_to_client() -> None:
     provider = OpenAICompatibleProvider(
         "https://mock-provider.test",
         "test-api-key",
-        timeout=5.0,
+        connect_timeout=3.0,
+        request_timeout=5.0,
         client=client,
     )
 
@@ -171,7 +180,13 @@ async def test_configured_timeout_is_passed_to_client() -> None:
         {"model": "test-model", "messages": []}
     )
 
-    assert client.post.await_args.kwargs["timeout"] == 5.0
+    timeout = client.post.await_args.kwargs["timeout"]
+
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.connect == 3.0
+    assert timeout.read == 5.0
+    assert timeout.write == 5.0
+    assert timeout.pool == 3.0
 
 
 def test_default_timeout_is_30_seconds() -> None:
@@ -181,6 +196,25 @@ def test_default_timeout_is_30_seconds() -> None:
     )
 
     assert provider.timeout == 30.0
+    assert provider.connect_timeout == 30.0
+    assert provider.request_timeout == 30.0
+
+
+def test_separate_timeouts_are_configured() -> None:
+    provider = OpenAICompatibleProvider(
+        "https://mock-provider.test",
+        "test-api-key",
+        connect_timeout=3.0,
+        request_timeout=10.0,
+    )
+
+    assert provider.connect_timeout == 3.0
+    assert provider.request_timeout == 10.0
+
+    assert provider.http_timeout.connect == 3.0
+    assert provider.http_timeout.read == 10.0
+    assert provider.http_timeout.write == 10.0
+    assert provider.http_timeout.pool == 3.0
 
 
 @pytest.mark.asyncio
@@ -223,6 +257,11 @@ async def test_invalid_response_raises_upstream_error() -> None:
             await provider.complete(
                 {"model": "test-model", "messages": []}
             )
+
+
+# ---------------------------------------------------------------------
+# Streaming tests
+# ---------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -453,11 +492,17 @@ async def test_stream_http_error_raises_upstream_error() -> None:
                 pass
 
 
+# ---------------------------------------------------------------------
+# Provider interface test
+# ---------------------------------------------------------------------
+
+
 def test_provider_implements_provider_adapter() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=successful_response())
 
     client = make_client(handler)
+
     provider = OpenAICompatibleProvider(
         "https://mock-provider.test",
         "test-api-key",

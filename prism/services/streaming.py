@@ -1,6 +1,8 @@
 """Streaming proxy service for the Prism LLM Gateway."""
 
+import asyncio
 import json
+import os
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -12,11 +14,48 @@ from prism.ports.repositories import UsageRepository
 
 logger = get_logger(__name__)
 
+DEFAULT_STREAM_IDLE_TIMEOUT = 10.0
+
+
+def get_stream_idle_timeout() -> float:
+    """Read the stream idle timeout from the environment."""
+
+    value = os.getenv(
+        "PRISM_STREAM_IDLE_TIMEOUT",
+        str(DEFAULT_STREAM_IDLE_TIMEOUT),
+    )
+
+    try:
+        timeout = float(value)
+        if timeout <= 0:
+            raise ValueError
+        return timeout
+    except ValueError:
+        logger.warning(
+            "Invalid PRISM_STREAM_IDLE_TIMEOUT; using default",
+            extra={"configured_value": value},
+        )
+        return DEFAULT_STREAM_IDLE_TIMEOUT
+
 
 def format_sse_chunk(chunk: dict[str, Any]) -> str:
     """Format a provider event as an SSE data message."""
 
     return f"data: {json.dumps(chunk)}\n\n"
+
+
+def format_sse_error(message: str) -> str:
+    """Format an upstream error as an SSE error event."""
+
+    return (
+        "event: error\n"
+        f"data: {json.dumps({
+            'error': {
+                'message': message,
+                'type': 'upstream_error',
+            }
+        })}\n\n"
+    )
 
 
 async def stream_response(
@@ -29,6 +68,9 @@ async def stream_response(
     """
     Forward provider events immediately while observing usage.
 
+    Abort the stream when the provider does not send a new chunk
+    within the configured idle timeout.
+
     Usage is inspected before forwarding each event so that a client
     disconnect immediately after receiving a usage event cannot prevent
     Prism from capturing that usage.
@@ -37,9 +79,38 @@ async def stream_response(
     usage: dict[str, int] | None = None
     completed = False
     error_message: str | None = None
+    idle_timeout = get_stream_idle_timeout()
 
     try:
-        async for chunk in provider_stream:
+        while True:
+            try:
+                chunk = await asyncio.wait_for(
+                    anext(provider_stream),
+                    timeout=idle_timeout,
+                )
+            except StopAsyncIteration:
+                break
+            except TimeoutError:
+                error_message = (
+                    f"Provider stream idle timeout after "
+                    f"{idle_timeout:g} seconds."
+                )
+
+                context.decision_trace.append(
+                    "upstream_error: stream idle timeout"
+                )
+
+                logger.error(
+                    "upstream_error",
+                    extra={
+                        "request_id": context.request_id,
+                        "error": error_message,
+                        "idle_timeout_seconds": idle_timeout,
+                    },
+                )
+
+                yield format_sse_error(error_message)
+                break
 
             # Inspect usage BEFORE yielding to the client.
             chunk_usage = chunk.get("usage")
@@ -65,6 +136,9 @@ async def stream_response(
             # Forward the event immediately.
             yield format_sse_chunk(chunk)
 
+    except asyncio.CancelledError:
+        raise
+
     except Exception as exc:
         error_message = str(exc)
 
@@ -72,6 +146,7 @@ async def stream_response(
             "Streaming request failed",
             extra={"request_id": context.request_id},
         )
+
         raise
 
     finally:
