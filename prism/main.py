@@ -4,16 +4,20 @@ import os
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 
 from prism.adapters.openai_compatible import OpenAICompatibleProvider
 from prism.adapters.sqlite_repos import (
     SQLiteKeyRepository,
+    SQLiteLogRepository,
     SQLiteUsageRepository,
     init_database,
 )
 from prism.adapters.system_clock import SystemClock
+from prism.api.error_handler import (
+    prism_error_handler,
+    unexpected_error_handler,
+)
 from prism.api.middleware import request_id_middleware
 from prism.api.routes import router
 from prism.config.logging import (
@@ -26,6 +30,7 @@ from prism.config.loader import load_configuration
 from prism.domain.errors import PrismError
 from prism.domain.limiter import TokenBucketRateLimiter
 from prism.services.pipeline import Pipeline
+
 
 logger = get_logger(__name__)
 
@@ -48,6 +53,7 @@ async def lifespan(app: FastAPI):
     key_repository.seed_keys(loaded_config.seed_keys)
 
     usage_repository = SQLiteUsageRepository(database_path)
+    log_repository = SQLiteLogRepository(database_path)
 
     # Initialize shared services.
     clock = SystemClock()
@@ -92,6 +98,7 @@ async def lifespan(app: FastAPI):
 
     app.state.key_repository = key_repository
     app.state.usage_repository = usage_repository
+    app.state.log_repository = log_repository
     app.state.database_path = database_path
 
     app.state.pipeline = Pipeline()
@@ -126,26 +133,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Register request ID middleware.
 app.middleware("http")(request_id_middleware)
 
+# Register centralized exception handlers.
+app.add_exception_handler(
+    PrismError,
+    prism_error_handler,
+)
 
-@app.exception_handler(PrismError)
-async def prism_error_handler(
-    request: Request,
-    exc: PrismError,
-):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": {
-                "message": exc.message,
-                "type": exc.error_type,
-                "code": exc.code,
-            }
-        },
-    )
+app.add_exception_handler(
+    Exception,
+    unexpected_error_handler,
+)
 
-
+# Register API routes.
 app.include_router(router)
 
 

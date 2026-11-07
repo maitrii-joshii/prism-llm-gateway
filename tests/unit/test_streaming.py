@@ -146,29 +146,44 @@ async def test_usage_is_recorded_after_normal_completion(
 
 
 @pytest.mark.asyncio
-async def test_usage_is_recorded_when_provider_raises_error(
+async def test_provider_failure_sends_sse_error_and_records_partial_usage(
     context,
     config,
     usage_repository,
     adapter,
 ):
+    """Provider failure sends an SSE error and persists partial usage."""
+
     async def provider_stream():
         yield make_usage_chunk()
         raise UpstreamError("Provider connection lost")
 
-    stream = stream_response(
-        provider_stream(),
-        context,
-        usage_repository,
-        config,
-        adapter,
-    )
+    chunks = [
+        chunk
+        async for chunk in stream_response(
+            provider_stream(),
+            context,
+            usage_repository,
+            config,
+            adapter,
+        )
+    ]
 
-    with pytest.raises(UpstreamError):
-        async for _ in stream:
-            pass
+    # The client receives an SSE error instead of an exception.
+    assert any("event: error" in chunk for chunk in chunks)
+    assert any("Provider disconnected" in chunk for chunk in chunks)
+    assert any("upstream_error" in chunk for chunk in chunks)
 
+    # Partial usage is still recorded.
     usage_repository.record_usage.assert_called_once()
+
+    assert context.cost_usd == pytest.approx(0.00004)
+
+    # The decision trace identifies the upstream failure.
+    assert any(
+        "upstream_error" in entry
+        for entry in context.decision_trace
+    )
 
 
 @pytest.mark.asyncio
@@ -195,6 +210,53 @@ async def test_usage_is_recorded_when_client_disconnects(
     assert '"usage"' in first_chunk
 
     await stream.aclose()
+
+    usage_repository.record_usage.assert_called_once()
+
+    assert context.cost_usd == pytest.approx(0.00004)
+
+
+@pytest.mark.asyncio
+async def test_provider_stream_is_closed_when_client_disconnects(
+    context,
+    config,
+    usage_repository,
+    adapter,
+):
+    """Closing the downstream stream closes the provider iterator."""
+
+    cleanup_called = False
+
+    async def provider_stream():
+        nonlocal cleanup_called
+
+        try:
+            yield make_usage_chunk()
+
+            yield {
+                "choices": [
+                    {"delta": {"content": "Hello"}}
+                ]
+            }
+
+        finally:
+            cleanup_called = True
+
+    stream = stream_response(
+        provider_stream(),
+        context,
+        usage_repository,
+        config,
+        adapter,
+    )
+
+    first_chunk = await anext(stream)
+
+    assert '"usage"' in first_chunk
+
+    await stream.aclose()
+
+    assert cleanup_called is True
 
     usage_repository.record_usage.assert_called_once()
 
@@ -234,7 +296,8 @@ async def test_usage_is_recorded_when_stream_idle_timeout_occurs(
     adapter,
     monkeypatch,
 ):
-    # Use a short timeout to keep the test fast.
+    """Partial usage is recorded when the provider becomes idle."""
+
     monkeypatch.setenv("PRISM_STREAM_IDLE_TIMEOUT", "0.05")
 
     async def provider_stream():

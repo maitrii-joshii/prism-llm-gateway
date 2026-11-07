@@ -1,5 +1,6 @@
 """API routes for the Prism LLM Gateway."""
 
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
@@ -14,9 +15,11 @@ from prism.domain.cost import CostCalculator
 from prism.domain.errors import (
     InvalidRequestError,
     ModelNotFoundError,
+    PrismError,
     UpstreamError,
 )
-from prism.domain.models import ProviderResponse, RequestContext
+from prism.domain.models import LogEntry, ProviderResponse, RequestContext
+from prism.domain.security import hash_api_key
 from prism.ports.provider import ProviderAdapter
 from prism.services.pipeline import Pipeline
 from prism.services.executor import ResilientExecutor
@@ -49,10 +52,8 @@ class ModelBoundProvider:
         request: dict[str, Any],
     ) -> ProviderResponse:
         """Forward a completion request using the bound model."""
-
         provider_request = request.copy()
         provider_request["model"] = self.model_name
-
         return await self.adapter.complete(provider_request)
 
     def stream(
@@ -60,16 +61,98 @@ class ModelBoundProvider:
         request: dict[str, Any],
     ) -> AsyncIterator[dict[str, Any]]:
         """Forward a streaming request using the bound model."""
-
         provider_request = request.copy()
         provider_request["model"] = self.model_name
-
         return self.adapter.stream(provider_request)
+
+
+def save_request_log(
+    request: Request,
+    context: RequestContext,
+    log_repository: Any,
+    status_code: int,
+    request_started_at: float,
+) -> None:
+    """
+    Persist request metadata without storing secrets or prompts.
+
+    Logging failures must not replace the original request result
+    or exception.
+    """
+    if log_repository is None:
+        logger.warning(
+            "Request log repository is not configured",
+            extra={"request_id": context.request_id},
+        )
+        return
+
+    try:
+        key_hash = (
+            context.key_config.key_hash
+            if context.key_config is not None
+            else None
+        )
+
+        # For rejected authentication attempts, hash the supplied key.
+        # Never store the raw key.
+        if key_hash is None:
+            raw_key = request.headers.get("x-api-key")
+            if raw_key and raw_key.strip():
+                key_hash = hash_api_key(raw_key)
+
+        provider_response = context.provider_response
+
+        latency_ms = max(
+            0,
+            int((time.perf_counter() - request_started_at) * 1000),
+        )
+
+        log_entry = LogEntry(
+            request_id=context.request_id,
+            key_hash=key_hash,
+            model_requested=context.model_requested,
+            model_resolved=context.model_resolved,
+            provider=context.provider_name,
+            status_code=status_code,
+            prompt_tokens=(
+                provider_response.prompt_tokens
+                if provider_response is not None
+                else context.stream_prompt_tokens
+            ),
+            completion_tokens=(
+                provider_response.completion_tokens
+                if provider_response is not None
+                else context.stream_completion_tokens
+            ),
+            cost_usd=context.cost_usd,
+            cache_result=context.cache_status,
+            fallback_used=context.fallback_used,
+            retries=context.retry_count,
+            latency_ms=latency_ms,
+            decision_trace=list(context.decision_trace),
+        )
+
+        log_repository.save_log(log_entry)
+
+        logger.info(
+            "Request log saved",
+            extra={
+                "request_id": context.request_id,
+                "status_code": status_code,
+                "latency_ms": latency_ms,
+            },
+        )
+
+    except Exception:
+        # Do not expose request payloads, API keys, or provider credentials.
+        logger.exception(
+            "Failed to save request log",
+            extra={"request_id": context.request_id},
+        )
 
 
 def get_provider_adapter(request: Request) -> ProviderAdapter:
     """Retrieve the legacy single-provider adapter."""
-
     adapter = getattr(request.app.state, "provider_adapter", None)
 
     if adapter is None:
@@ -82,7 +165,6 @@ def get_provider_adapters(
     request: Request,
 ) -> dict[str, ProviderAdapter]:
     """Retrieve adapters indexed by supported model name."""
-
     adapters = getattr(
         request.app.state,
         "provider_adapters",
@@ -101,7 +183,6 @@ def get_provider_name(
     adapter: ProviderAdapter,
 ) -> str:
     """Resolve a meaningful provider name for a model."""
-
     configured_names = getattr(
         request.app.state,
         "provider_names",
@@ -113,7 +194,6 @@ def get_provider_name(
         if name:
             return name
 
-    # Current Prism model-to-provider mapping.
     if model_name.startswith("gpt-"):
         return "openai"
 
@@ -129,7 +209,6 @@ def get_provider_name(
 
 def get_gateway_config(loaded_config: Any) -> Any:
     """Support both LoadedConfig and GatewayConfig objects."""
-
     return getattr(
         loaded_config,
         "gateway_config",
@@ -139,7 +218,6 @@ def get_gateway_config(loaded_config: Any) -> Any:
 
 def get_model_pricing(loaded_config: Any) -> dict[str, Any]:
     """Retrieve model pricing from the loaded configuration."""
-
     gateway_config = get_gateway_config(loaded_config)
 
     return getattr(
@@ -154,14 +232,11 @@ def resolve_model_candidates(
     loaded_config: Any,
 ) -> RequestContext:
     """Resolve aliases into primary and fallback model candidates."""
-
     gateway_config = get_gateway_config(loaded_config)
-
     aliases = gateway_config.aliases
     pricing = get_model_pricing(loaded_config)
 
     requested_model = context.model_requested
-
     alias_config = aliases.get(requested_model)
 
     if alias_config is not None:
@@ -173,7 +248,6 @@ def resolve_model_candidates(
         context.decision_trace.append(
             f"alias '{requested_model}' resolved"
         )
-
     else:
         if requested_model not in pricing:
             raise ModelNotFoundError(
@@ -182,7 +256,7 @@ def resolve_model_candidates(
 
         candidates = [requested_model]
 
-    # Remove duplicate models while preserving order.
+    # Remove duplicates while preserving order.
     context.model_candidates = list(dict.fromkeys(candidates))
 
     if not context.model_candidates:
@@ -204,7 +278,6 @@ def format_completion_response(
     result: ProviderResponse,
 ) -> dict[str, Any]:
     """Convert the normalized provider response to OpenAI's format."""
-
     return {
         "id": f"chatcmpl-{uuid4().hex}",
         "object": "chat.completion",
@@ -233,7 +306,6 @@ def set_context_headers(
     context: RequestContext,
 ) -> None:
     """Set Prism response headers using the completed request context."""
-
     response.headers["x-prism-request-id"] = context.request_id
 
     if context.provider_name and context.model_resolved:
@@ -255,7 +327,6 @@ def build_streaming_headers(
     context: RequestContext,
 ) -> dict[str, str]:
     """Build response headers before streaming starts."""
-
     if not context.provider_name or not context.model_resolved:
         raise UpstreamError(
             "Provider and model must be resolved before streaming."
@@ -280,9 +351,16 @@ async def format_streaming_body(
     usage_repository: Any,
     loaded_config: Any,
     adapter: Any,
+    request: Request,
+    log_repository: Any,
+    request_started_at: float,
 ) -> AsyncIterator[str]:
-    """Forward SSE chunks and format the final OpenAI DONE marker."""
+    """
+    Forward SSE chunks and persist the final streaming request log.
 
+    Provider failures are represented by an SSE error event from
+    stream_response(). Client disconnects are logged with status 499.
+    """
     streaming_generator = stream_response(
         provider_stream=provider_stream,
         context=context,
@@ -291,23 +369,91 @@ async def format_streaming_body(
         adapter=adapter,
     )
 
+    status_code = 200
+    client_disconnected = False
+
     try:
         async for formatted_chunk in streaming_generator:
-            try:
-                data = formatted_chunk.removeprefix("data: ").strip()
-                event = json.loads(data)
+            # SSE error events have an "event: error" line before their
+            # JSON data line. Inspect each data line to detect the error.
+            is_done_event = False
 
-                if event.get("done") is True:
-                    yield "data: [DONE]\n\n"
+            for line in formatted_chunk.splitlines():
+                if not line.startswith("data:"):
                     continue
 
-            except (json.JSONDecodeError, AttributeError):
-                pass
+                data = line.removeprefix("data:").strip()
+
+                try:
+                    event = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+
+                if not isinstance(event, dict):
+                    continue
+
+                error = event.get("error")
+                if (
+                    isinstance(error, dict)
+                    and error.get("type") == "upstream_error"
+                ):
+                    status_code = 502
+
+                if event.get("done") is True:
+                    is_done_event = True
+
+            if is_done_event:
+                yield "data: [DONE]\n\n"
+                continue
 
             yield formatted_chunk
 
+    except (asyncio.CancelledError, GeneratorExit):
+        client_disconnected = True
+        status_code = 499
+        context.decision_trace.append(
+            "client disconnected during streaming"
+        )
+        raise
+
+    except Exception:
+        status_code = 502
+        context.decision_trace.append(
+            "request failed: upstream_error"
+        )
+        logger.exception(
+            "Streaming response failed",
+            extra={"request_id": context.request_id},
+        )
+        raise
+
     finally:
-        await streaming_generator.aclose()
+        # Ensure request logging happens even if closing the stream fails.
+        try:
+            await streaming_generator.aclose()
+        except Exception:
+            logger.exception(
+                "Failed to close streaming generator",
+                extra={"request_id": context.request_id},
+            )
+            if status_code == 200:
+                status_code = 502
+                context.decision_trace.append(
+                    "stream cleanup failed"
+                )
+        finally:
+            if client_disconnected:
+                context.decision_trace.append(
+                    "stream terminated by client disconnect"
+                )
+
+            save_request_log(
+                request=request,
+                context=context,
+                log_repository=log_repository,
+                status_code=status_code,
+                request_started_at=request_started_at,
+            )
 
 
 @router.post("/v1/chat/completions")
@@ -317,6 +463,7 @@ async def chat_completions(
     response: Response,
 ) -> Any:
     """Process a chat completion request through the pipeline."""
+    request_started_at = time.perf_counter()
 
     key_repository = getattr(
         request.app.state,
@@ -349,6 +496,12 @@ async def chat_completions(
 
     if usage_repository is None:
         raise UpstreamError("Usage repository is not configured")
+
+    log_repository = getattr(
+        request.app.state,
+        "log_repository",
+        None,
+    )
 
     initial_model = payload.get("model", "")
     initial_messages = payload.get("messages", [])
@@ -455,10 +608,8 @@ async def chat_completions(
                 "Gateway configuration is not loaded"
             )
 
-        # -----------------------------------------------------
-        # Streaming path: use the resolved primary provider.
-        # Automatic streaming failover is not implemented here.
-        # -----------------------------------------------------
+        # Streaming uses the resolved primary provider.
+        # Automatic streaming failover is intentionally not implemented.
         if context.stream:
             primary_model = context.model_candidates[0]
             adapters = get_provider_adapters(request)
@@ -477,7 +628,6 @@ async def chat_completions(
                     primary_model,
                     adapter,
                 )
-
             else:
                 adapter = get_provider_adapter(request)
                 context.provider_name = "alpha"
@@ -502,14 +652,11 @@ async def chat_completions(
 
             return context
 
-        # -----------------------------------------------------
         # Non-streaming path: retry and failover execution.
-        # -----------------------------------------------------
         adapters = get_provider_adapters(request)
 
         if not adapters:
-            # Backward compatibility for existing single-provider
-            # tests and integrations.
+            # Backward compatibility for single-provider tests.
             adapter = get_provider_adapter(request)
 
             context.provider_name = "alpha"
@@ -602,7 +749,6 @@ async def chat_completions(
             context.decision_trace.append(
                 f"provider {context.provider_name} succeeded"
             )
-
             context.decision_trace.append(
                 f"retry count: {context.retry_count}"
             )
@@ -671,10 +817,42 @@ async def chat_completions(
         None,
     ) or Pipeline()
 
-    context = await pipeline.run(
-        context,
-        stages=stages,
-    )
+    # Log pipeline failures before re-raising the original exception.
+    try:
+        context = await pipeline.run(
+            context,
+            stages=stages,
+        )
+
+    except PrismError as exc:
+        context.decision_trace.append(
+            f"request failed: {exc.error_type}"
+        )
+
+        save_request_log(
+            request=request,
+            context=context,
+            log_repository=log_repository,
+            status_code=exc.status_code,
+            request_started_at=request_started_at,
+        )
+
+        raise
+
+    except Exception:
+        context.decision_trace.append(
+            "request failed: internal_error"
+        )
+
+        save_request_log(
+            request=request,
+            context=context,
+            log_repository=log_repository,
+            status_code=500,
+            request_started_at=request_started_at,
+        )
+
+        raise
 
     logger.info(
         "Decision trace: %s",
@@ -685,9 +863,7 @@ async def chat_completions(
         },
     )
 
-    # ---------------------------------------------------------
-    # Streaming response path
-    # ---------------------------------------------------------
+    # Streaming response path.
     if context.stream:
         loaded_config = request.app.state.loaded_config
         adapters = get_provider_adapters(request)
@@ -709,6 +885,9 @@ async def chat_completions(
             usage_repository=usage_repository,
             loaded_config=loaded_config,
             adapter=adapter,
+            request=request,
+            log_repository=log_repository,
+            request_started_at=request_started_at,
         )
 
         return StreamingResponse(
@@ -718,10 +897,20 @@ async def chat_completions(
             headers=headers,
         )
 
-    # ---------------------------------------------------------
-    # Non-streaming response path
-    # ---------------------------------------------------------
+    # Non-streaming response path.
     if context.provider_response is None:
+        context.decision_trace.append(
+            "request failed: missing provider response"
+        )
+
+        save_request_log(
+            request=request,
+            context=context,
+            log_repository=log_repository,
+            status_code=502,
+            request_started_at=request_started_at,
+        )
+
         raise UpstreamError(
             "Pipeline completed without a provider response"
         )
@@ -737,6 +926,14 @@ async def chat_completions(
             "retries": context.retry_count,
             "fallback_used": context.fallback_used,
         },
+    )
+
+    save_request_log(
+        request=request,
+        context=context,
+        log_repository=log_repository,
+        status_code=200,
+        request_started_at=request_started_at,
     )
 
     return format_completion_response(

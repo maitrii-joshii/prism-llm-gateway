@@ -1,7 +1,8 @@
 """Integration tests for the Prism streaming HTTP endpoint.
 
 Covers SSE responses, usage persistence, completion markers,
-non-streaming compatibility, and upstream stream idle timeouts.
+non-streaming compatibility, upstream stream idle timeouts,
+and partial usage persistence after mid-stream provider failures.
 """
 
 import asyncio
@@ -16,6 +17,7 @@ import pytest_asyncio
 from fastapi import FastAPI
 
 from prism.adapters.sqlite_repos import (
+    SQLiteLogRepository,
     SQLiteUsageRepository,
     hash_api_key,
     init_database,
@@ -62,8 +64,37 @@ class IdleTimeoutFakeProviderAdapter(FakeProviderAdapter):
             },
         }
 
-        # Simulate a provider that stops sending chunks.
         await asyncio.sleep(1)
+
+
+class MidStreamFailureFakeProviderAdapter(FakeProviderAdapter):
+    """Fake provider that sends partial usage and then crashes."""
+
+    async def stream(self, request):
+        self.stream_call_count += 1
+        self.last_request = request
+
+        yield {
+            "id": "fake-stream-failure",
+            "object": "chat.completion.chunk",
+            "model": "fake-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "content": "Partial response"
+                    },
+                    "finish_reason": None,
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 4,
+                "total_tokens": 16,
+            },
+        }
+
+        raise RuntimeError("Simulated provider disconnection")
 
 
 def create_test_app():
@@ -74,13 +105,15 @@ def create_test_app():
     app.state.clock = SystemClock()
     app.state.rate_limiter = TokenBucketRateLimiter(app.state.clock)
 
-    # Use a temporary database for usage persistence.
     temp_dir = TemporaryDirectory()
     database_path = Path(temp_dir.name) / "streaming_usage.db"
 
     init_database(str(database_path))
 
     app.state.usage_repository = SQLiteUsageRepository(
+        str(database_path)
+    )
+    app.state.log_repository = SQLiteLogRepository(
         str(database_path)
     )
     app.state.temp_dir = temp_dir
@@ -100,8 +133,6 @@ def create_test_app():
     key_repository.get_by_hash.return_value = key_config
     app.state.key_repository = key_repository
 
-    # Configure pricing for both the fake provider model and the
-    # model name resolved by the streaming route.
     app.state.loaded_config = GatewayConfig(
         model_pricing={
             "fake-model": ModelPricing(
@@ -186,7 +217,6 @@ async def test_streaming_response_returns_sse_chunks(client, app):
             "text/event-stream"
         )
 
-        # Verify all Prism streaming headers.
         assert response.headers["x-prism-request-id"]
         assert response.headers["x-prism-provider"] == "alpha/gpt-4o-mini"
         assert response.headers["x-prism-cache"] == "miss"
@@ -197,7 +227,6 @@ async def test_streaming_response_returns_sse_chunks(client, app):
             if line.startswith("data:"):
                 response_chunks.append(line)
 
-    # The fake adapter emits role, content, usage and DONE events.
     assert len(response_chunks) >= 5
     assert app.state.fake_adapter.stream_call_count == 1
 
@@ -213,8 +242,6 @@ async def test_streaming_records_usage_after_completion(client, app):
         headers={"x-api-key": TEST_API_KEY},
     ) as response:
         assert response.status_code == 200
-
-        # Consume the entire response to allow the stream to finish.
         body = await response.aread()
 
     assert b"data: [DONE]\n\n" in body
@@ -314,15 +341,12 @@ async def test_streaming_idle_timeout_returns_error_and_records_usage(
 
         body = await response.aread()
 
-    # Verify that the client receives an SSE error event.
     assert b"event: error" in body
     assert b"upstream_error" in body
     assert b"idle timeout" in body
 
-    # Verify that the provider was called.
     assert idle_adapter.stream_call_count == 1
 
-    # Verify that usage was persisted despite the idle timeout.
     month = datetime.now(timezone.utc).strftime("%Y-%m")
 
     usage = app.state.usage_repository.get_usage(
@@ -336,3 +360,67 @@ async def test_streaming_idle_timeout_returns_error_and_records_usage(
     expected_cost = ((10 * 2.0) + (5 * 4.0)) / 1_000_000
 
     assert usage.total_spend_usd == pytest.approx(expected_cost)
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_provider_failure_logs_partial_usage(
+    client,
+    app,
+):
+    """
+    A provider failure after the first chunk sends an SSE error
+    and persists the observed partial token counts in request_logs.
+    """
+
+    failing_adapter = MidStreamFailureFakeProviderAdapter()
+
+    app.state.provider_adapter = failing_adapter
+    app.state.fake_adapter = failing_adapter
+
+    async with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json=valid_payload(stream=True),
+        headers={"x-api-key": TEST_API_KEY},
+    ) as response:
+        assert response.status_code == 200
+
+        request_id = response.headers["x-prism-request-id"]
+
+        body = await response.aread()
+
+    # The partial response was sent before the provider failed.
+    assert b"Partial response" in body
+
+    # The stream terminates with an upstream error event.
+    assert b"event: error" in body
+    assert b"upstream_error" in body
+    assert b"Provider disconnected" in body
+
+    assert failing_adapter.stream_call_count == 1
+
+    # Verify partial usage was recorded in the usage repository.
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+
+    usage = app.state.usage_repository.get_usage(
+        key_hash=hash_api_key(TEST_API_KEY),
+        month=month,
+    )
+
+    assert usage.total_requests == 1
+    assert usage.total_tokens == 16
+
+    # Verify the request log contains the partial token counts.
+    log_entry = app.state.log_repository.get_log(request_id)
+
+    assert log_entry is not None
+    assert log_entry.status_code == 502
+    assert log_entry.prompt_tokens == 12
+    assert log_entry.completion_tokens == 4
+    assert log_entry.key_hash == hash_api_key(TEST_API_KEY)
+
+    assert any(
+        "error" in trace.lower()
+        or "fail" in trace.lower()
+        for trace in log_entry.decision_trace
+    )

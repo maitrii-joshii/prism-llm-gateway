@@ -1,6 +1,6 @@
 """Core domain models used throughout the Prism LLM Gateway."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -56,6 +56,11 @@ class RequestContext(BaseModel):
     # Store the normalized provider response after provider execution.
     provider_response: ProviderResponse | None = None
 
+    # Token usage observed while processing a streaming response.
+    # These values are updated as usage information arrives from the provider.
+    stream_prompt_tokens: int = Field(default=0, ge=0)
+    stream_completion_tokens: int = Field(default=0, ge=0)
+
     decision_trace: list[str] = Field(default_factory=list)
     start_time: datetime
 
@@ -63,6 +68,33 @@ class RequestContext(BaseModel):
     cache_status: str = "miss"
     fallback_used: bool = False
     cost_usd: float = Field(default=0.0, ge=0)
+
+
+class LogEntry(BaseModel):
+    """Request-level metadata stored in the request_logs table."""
+
+    request_id: str
+    key_hash: str | None = None
+
+    model_requested: str = ""
+    model_resolved: str | None = None
+    provider: str | None = None
+
+    status_code: int
+
+    prompt_tokens: int = Field(default=0, ge=0)
+    completion_tokens: int = Field(default=0, ge=0)
+    cost_usd: float = Field(default=0.0, ge=0)
+
+    cache_result: str | None = None
+    fallback_used: bool = False
+    retries: int = Field(default=0, ge=0)
+    latency_ms: int | None = Field(default=None, ge=0)
+
+    decision_trace: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
 
 
 class ModelPricing(BaseModel):
@@ -123,4 +155,5 @@ __all__ = [
     "AliasConfig",
     "UsageRecord",
     "MonthlyUsage",
+    "LogEntry",
 ]
