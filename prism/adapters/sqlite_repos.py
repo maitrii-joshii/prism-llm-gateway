@@ -2,12 +2,17 @@
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Union
 
-from prism.domain.models import MonthlyUsage, VirtualKeyConfig
+from prism.domain.models import LogEntry, MonthlyUsage, VirtualKeyConfig
 from prism.domain.security import hash_api_key
-from prism.ports.repositories import KeyRepository, UsageRepository
+from prism.ports.repositories import (
+    KeyRepository,
+    LogRepository,
+    UsageRepository,
+)
 
 
 DatabasePath = Union[str, Path]
@@ -353,3 +358,195 @@ class SQLiteUsageRepository(UsageRepository):
 
         finally:
             connection.close()
+
+
+class SQLiteLogRepository(LogRepository):
+    """SQLite implementation of request logging and retrieval."""
+
+    def __init__(self, database_path: DatabasePath) -> None:
+        self.database_path = database_path
+
+    def save_log(self, log_entry: LogEntry) -> None:
+        """Save a request log entry."""
+
+        if not isinstance(log_entry, LogEntry):
+            raise TypeError("log_entry must be a LogEntry instance.")
+
+        connection = get_connection(self.database_path)
+
+        try:
+            connection.execute(
+                """
+                INSERT INTO request_logs (
+                    request_id,
+                    key_hash,
+                    model_requested,
+                    model_resolved,
+                    provider,
+                    status_code,
+                    prompt_tokens,
+                    completion_tokens,
+                    cost_usd,
+                    cache_result,
+                    fallback_used,
+                    retries,
+                    latency_ms,
+                    decision_trace,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    log_entry.request_id,
+                    log_entry.key_hash,
+                    log_entry.model_requested,
+                    log_entry.model_resolved,
+                    log_entry.provider,
+                    log_entry.status_code,
+                    log_entry.prompt_tokens,
+                    log_entry.completion_tokens,
+                    log_entry.cost_usd,
+                    log_entry.cache_result,
+                    int(log_entry.fallback_used),
+                    log_entry.retries,
+                    log_entry.latency_ms,
+                    json.dumps(log_entry.decision_trace),
+                    log_entry.created_at.isoformat(),
+                ),
+            )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+        finally:
+            connection.close()
+
+    def get_logs(
+        self,
+        limit: int,
+        offset: int,
+        key_hash: str | None = None,
+    ) -> list[LogEntry]:
+        """Return request logs with pagination and optional key filtering."""
+
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer.")
+
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("offset must be a non-negative integer.")
+
+        connection = get_connection(self.database_path)
+
+        try:
+            query = """
+                SELECT
+                    request_id,
+                    key_hash,
+                    model_requested,
+                    model_resolved,
+                    provider,
+                    status_code,
+                    prompt_tokens,
+                    completion_tokens,
+                    cost_usd,
+                    cache_result,
+                    fallback_used,
+                    retries,
+                    latency_ms,
+                    decision_trace,
+                    created_at
+                FROM request_logs
+            """
+
+            parameters: tuple = ()
+
+            if key_hash is not None:
+                query += " WHERE key_hash = ?"
+                parameters = (key_hash,)
+
+            query += """
+                ORDER BY created_at DESC, request_id DESC
+                LIMIT ? OFFSET ?
+            """
+
+            parameters += (limit, offset)
+
+            rows = connection.execute(
+                query,
+                parameters,
+            ).fetchall()
+
+            return [
+                self._row_to_log_entry(row)
+                for row in rows
+            ]
+
+        finally:
+            connection.close()
+
+    def get_log(self, request_id: str) -> LogEntry | None:
+        """Return one request log by request ID."""
+
+        connection = get_connection(self.database_path)
+
+        try:
+            row = connection.execute(
+                """
+                SELECT
+                    request_id,
+                    key_hash,
+                    model_requested,
+                    model_resolved,
+                    provider,
+                    status_code,
+                    prompt_tokens,
+                    completion_tokens,
+                    cost_usd,
+                    cache_result,
+                    fallback_used,
+                    retries,
+                    latency_ms,
+                    decision_trace,
+                    created_at
+                FROM request_logs
+                WHERE request_id = ?
+                """,
+                (request_id,),
+            ).fetchone()
+
+            if row is None:
+                return None
+
+            return self._row_to_log_entry(row)
+
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _row_to_log_entry(row: tuple) -> LogEntry:
+        """Convert a SQLite request log row into a LogEntry model."""
+
+        return LogEntry(
+            request_id=row[0],
+            key_hash=row[1],
+            model_requested=row[2] or "",
+            model_resolved=row[3],
+            provider=row[4],
+            status_code=row[5],
+            prompt_tokens=row[6] or 0,
+            completion_tokens=row[7] or 0,
+            cost_usd=row[8] or 0.0,
+            cache_result=row[9],
+            fallback_used=bool(row[10]),
+            retries=row[11] or 0,
+            latency_ms=row[12],
+            decision_trace=json.loads(row[13]) if row[13] else [],
+            created_at=(
+                datetime.fromisoformat(row[14])
+                if row[14]
+                else datetime.now(timezone.utc)
+            ),
+        )
