@@ -14,20 +14,24 @@ from prism.config.logging import get_logger
 from prism.domain.cost import CostCalculator
 from prism.domain.errors import (
     InvalidRequestError,
-    ModelNotFoundError,
     PrismError,
     UpstreamError,
 )
 from prism.domain.models import LogEntry, ProviderResponse, RequestContext
 from prism.domain.security import hash_api_key
 from prism.ports.provider import ProviderAdapter
-from prism.services.pipeline import Pipeline
 from prism.services.executor import ResilientExecutor
+from prism.services.pipeline import Pipeline
 from prism.services.streaming import stream_response
 from prism.services.stages.auth import authenticate_request
 from prism.services.stages.allowlist import enforce_model_allowlist
 from prism.services.stages.budget import enforce_budget
 from prism.services.stages.rate_limiter import enforce_rate_limit
+from prism.services.stages.resolve import (
+    get_gateway_config,
+    get_model_pricing,
+    resolve_model_candidates,
+)
 from prism.services.stages.validate import validate_request
 
 router = APIRouter()
@@ -73,12 +77,7 @@ def save_request_log(
     status_code: int,
     request_started_at: float,
 ) -> None:
-    """
-    Persist request metadata without storing secrets or prompts.
-
-    Logging failures must not replace the original request result
-    or exception.
-    """
+    """Persist request metadata without storing secrets or prompts."""
     if log_repository is None:
         logger.warning(
             "Request log repository is not configured",
@@ -93,8 +92,7 @@ def save_request_log(
             else None
         )
 
-        # For rejected authentication attempts, hash the supplied key.
-        # Never store the raw key.
+        # Hash rejected authentication attempts; never store raw keys.
         if key_hash is None:
             raw_key = request.headers.get("x-api-key")
             if raw_key and raw_key.strip():
@@ -144,7 +142,6 @@ def save_request_log(
         )
 
     except Exception:
-        # Do not expose request payloads, API keys, or provider credentials.
         logger.exception(
             "Failed to save request log",
             extra={"request_id": context.request_id},
@@ -205,73 +202,6 @@ def get_provider_name(
         "name",
         adapter.__class__.__name__,
     )
-
-
-def get_gateway_config(loaded_config: Any) -> Any:
-    """Support both LoadedConfig and GatewayConfig objects."""
-    return getattr(
-        loaded_config,
-        "gateway_config",
-        loaded_config,
-    )
-
-
-def get_model_pricing(loaded_config: Any) -> dict[str, Any]:
-    """Retrieve model pricing from the loaded configuration."""
-    gateway_config = get_gateway_config(loaded_config)
-
-    return getattr(
-        loaded_config,
-        "model_pricing",
-        getattr(gateway_config, "model_pricing", {}),
-    )
-
-
-def resolve_model_candidates(
-    context: RequestContext,
-    loaded_config: Any,
-) -> RequestContext:
-    """Resolve aliases into primary and fallback model candidates."""
-    gateway_config = get_gateway_config(loaded_config)
-    aliases = gateway_config.aliases
-    pricing = get_model_pricing(loaded_config)
-
-    requested_model = context.model_requested
-    alias_config = aliases.get(requested_model)
-
-    if alias_config is not None:
-        candidates = [
-            alias_config.primary_model,
-            *alias_config.fallback_chain,
-        ]
-
-        context.decision_trace.append(
-            f"alias '{requested_model}' resolved"
-        )
-    else:
-        if requested_model not in pricing:
-            raise ModelNotFoundError(
-                f"Model '{requested_model}' is not configured."
-            )
-
-        candidates = [requested_model]
-
-    # Remove duplicates while preserving order.
-    context.model_candidates = list(dict.fromkeys(candidates))
-
-    if not context.model_candidates:
-        raise ModelNotFoundError(
-            f"No models configured for '{requested_model}'."
-        )
-
-    context.model_resolved = context.model_candidates[0]
-
-    context.decision_trace.append(
-        "model candidates: "
-        + ", ".join(context.model_candidates)
-    )
-
-    return context
 
 
 def format_completion_response(
@@ -355,12 +285,7 @@ async def format_streaming_body(
     log_repository: Any,
     request_started_at: float,
 ) -> AsyncIterator[str]:
-    """
-    Forward SSE chunks and persist the final streaming request log.
-
-    Provider failures are represented by an SSE error event from
-    stream_response(). Client disconnects are logged with status 499.
-    """
+    """Forward SSE chunks and persist the final streaming request log."""
     streaming_generator = stream_response(
         provider_stream=provider_stream,
         context=context,
@@ -374,8 +299,6 @@ async def format_streaming_body(
 
     try:
         async for formatted_chunk in streaming_generator:
-            # SSE error events have an "event: error" line before their
-            # JSON data line. Inspect each data line to detect the error.
             is_done_event = False
 
             for line in formatted_chunk.splitlines():
@@ -428,7 +351,6 @@ async def format_streaming_body(
         raise
 
     finally:
-        # Ensure request logging happens even if closing the stream fails.
         try:
             await streaming_generator.aclose()
         except Exception:
@@ -804,8 +726,8 @@ async def chat_completions(
     stages = [
         auth_stage,
         validate_stage,
-        model_resolution_stage,
         rate_limit_stage,
+        model_resolution_stage,
         allowlist_stage,
         budget_stage,
         provider_call_stage,

@@ -1,0 +1,40 @@
+{"prompt":"What is the capital of France?","expected_tier":"fast"}
+{"prompt":"List five popular Python frameworks.","expected_tier":"fast"}
+{"prompt":"Translate hello into Spanish.","expected_tier":"fast"}
+{"prompt":"Summarize the purpose of an API gateway.","expected_tier":"fast"}
+{"prompt":"Extract all email addresses from this text.","expected_tier":"fast"}
+{"prompt":"Define the term database indexing.","expected_tier":"fast"}
+{"prompt":"Who is the creator of Python?","expected_tier":"fast"}
+{"prompt":"Convert 10 kilometers into meters.","expected_tier":"fast"}
+{"prompt":"What is the name of the largest planet?","expected_tier":"fast"}
+{"prompt":"Format this date as YYYY-MM-DD.","expected_tier":"fast"}
+{"prompt":"List three HTTP methods.","expected_tier":"fast"}
+{"prompt":"Summarize this paragraph in two sentences.","expected_tier":"fast"}
+{"prompt":"Identify the programming language used in this snippet.","expected_tier":"fast"}
+{"prompt":"Look up the default port for HTTPS.","expected_tier":"fast"}
+{"prompt":"Spell the word accommodation.","expected_tier":"fast"}
+{"prompt":"Give the date of India's independence.","expected_tier":"fast"}
+{"prompt":"Extract the product names from this list.","expected_tier":"fast"}
+{"prompt":"Translate this sentence into French.","expected_tier":"fast"}
+{"prompt":"Where is the Eiffel Tower located?","expected_tier":"fast"}
+{"prompt":"List the supported file formats.","expected_tier":"fast"}
+{"prompt":"Prove that the square root of 2 is irrational.","expected_tier":"smart"}
+{"prompt":"Derive the time complexity of binary search.","expected_tier":"smart"}
+{"prompt":"Why does a database deadlock occur?","expected_tier":"smart"}
+{"prompt":"Explain the logic behind optimistic locking.","expected_tier":"smart"}
+{"prompt":"Debug this code and identify the root cause.","expected_tier":"smart"}
+{"prompt":"Design a scalable URL shortening service.","expected_tier":"smart"}
+{"prompt":"Analyze the trade-offs between SQL and NoSQL databases.","expected_tier":"smart"}
+{"prompt":"Compare and contrast monolith and microservices architectures.","expected_tier":"smart"}
+{"prompt":"Implement a thread-safe rate limiter.","expected_tier":"smart"}
+{"prompt":"Optimize this database query for better performance.","expected_tier":"smart"}
+{"prompt":"Evaluate the consistency guarantees of distributed databases.","expected_tier":"smart"}
+{"prompt":"Justify the choice of Redis for caching in this system.","expected_tier":"smart"}
+{"prompt":"Calculate the expected time complexity of this algorithm.","expected_tier":"smart"}
+{"prompt":"Solve x^2 + 2x + 1 = 0.","expected_tier":"smart"}
+{"prompt":"Trace the execution flow of this recursive function.","expected_tier":"smart"}
+{"prompt":"Explain step by step how JWT authentication works.","expected_tier":"smart"}
+{"prompt":"Investigate why concurrent requests cause a race condition.","expected_tier":"smart"}
+{"prompt":"Design the architecture for a distributed message queue.","expected_tier":"smart"}
+{"prompt":"Explain the logic of a two-phase commit protocol.","expected_tier":"smart"}
+{"prompt":"Analyze the failure scenarios in this system architecture.","expected_tier":"smart"}

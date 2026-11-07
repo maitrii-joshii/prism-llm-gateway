@@ -7,7 +7,7 @@ from prism.domain.models import RequestContext
 async def enforce_model_allowlist(
     context: RequestContext,
 ) -> RequestContext:
-    """Ensure all candidate models are allowed for the authenticated key."""
+    """Ensure the authenticated key can access requested and resolved models."""
 
     if context.key_config is None:
         raise AuthenticationError(
@@ -16,23 +16,56 @@ async def enforce_model_allowlist(
 
     allowed_models = context.key_config.model_allowlist
 
-    # Wildcard means the key can access every model.
+    # Wildcard means the key can access every model and alias.
     if "*" in allowed_models:
         context.decision_trace.append("model allowlist ok (wildcard)")
         return context
 
-    # Use candidate models when available.
-    # Otherwise, preserve the original single-model behavior.
+    requested_model = context.model_requested.strip()
+
+    # Check the original requested model or alias.
+    if requested_model not in allowed_models:
+        context.decision_trace.append("model not allowed")
+        raise ModelNotAllowedError(
+            f"Model '{requested_model}' is not allowed for this API key."
+        )
+
+    # For auto routing, also check the classifier-selected tier.
+    if requested_model == "auto":
+        selected_tier = next(
+            (
+                tier
+                for tier in ("fast", "smart")
+                if any(
+                    f"auto→{tier} " in trace
+                    for trace in context.decision_trace
+                )
+            ),
+            None,
+        )
+
+        if selected_tier is None:
+            context.decision_trace.append("model not allowed")
+            raise ModelNotAllowedError(
+                "Automatic routing decision is missing."
+            )
+
+        if selected_tier not in allowed_models:
+            context.decision_trace.append("model not allowed")
+            raise ModelNotAllowedError(
+                f"Model tier '{selected_tier}' is not allowed "
+                "for this API key."
+            )
+
+    # Check all resolved primary and fallback model candidates.
     requested_models = (
         context.model_candidates
         if context.model_candidates
-        else [context.model_requested]
+        else [requested_model]
     )
 
-    # Reject the request if any candidate model is not allowed.
     for model in requested_models:
         if model not in allowed_models:
-            # Keep the original decision trace for backward compatibility.
             context.decision_trace.append("model not allowed")
             raise ModelNotAllowedError(
                 f"Model '{model}' is not allowed for this API key."
@@ -43,3 +76,6 @@ async def enforce_model_allowlist(
     )
 
     return context
+
+
+__all__ = ["enforce_model_allowlist"]
