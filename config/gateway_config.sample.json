@@ -5,6 +5,11 @@
       "primary_model": "gpt-4o-mini",
       "fallback_chain": ["llama-3.3-70b-versatile"]
     },
+    "smart": {
+      "alias_name": "smart",
+      "primary_model": "llama-3.3-70b-versatile",
+      "fallback_chain": ["gpt-4o-mini"]
+    },
     "quality": {
       "alias_name": "quality",
       "primary_model": "llama-3.3-70b-versatile",
