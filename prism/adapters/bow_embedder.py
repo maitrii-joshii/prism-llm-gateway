@@ -8,8 +8,6 @@ from prism.ports.embedder import Embedder
 
 
 class BowEmbedder(Embedder):
-    """Convert text into a deterministic Bag-of-Words vector."""
-
     VECTOR_SIZE = 256
 
     STOP_WORDS = {
@@ -21,9 +19,12 @@ class BowEmbedder(Embedder):
         "am", "be", "been", "being", "with", "from",
     }
 
-    def tokenize(self, text: str) -> list[str]:
-        """Split text into lowercase tokens and remove stop words."""
+    # Domain-specific normalization applied during embedding.
+    TOKEN_NORMALIZATION = {
+        "reset": "change",
+    }
 
+    def tokenize(self, text: str) -> list[str]:
         if not isinstance(text, str):
             raise TypeError("Text must be a string.")
 
@@ -36,20 +37,20 @@ class BowEmbedder(Embedder):
         ]
 
     def embed(self, text: str) -> list[float]:
-        """
-        Convert text into a fixed-size term-frequency vector.
-
-        Hashing gives each token a deterministic vector position,
-        allowing vectors from different texts to be compared.
-        """
-
         tokens = self.tokenize(text)
+
+        # Normalize synonyms without changing tokenize() output.
+        normalized_tokens = [
+            self.TOKEN_NORMALIZATION.get(token, token)
+            for token in tokens
+        ]
+
         vector = [0.0] * self.VECTOR_SIZE
 
-        if not tokens:
+        if not normalized_tokens:
             return vector
 
-        for token in tokens:
+        for token in normalized_tokens:
             token_hash = hashlib.sha256(
                 token.encode("utf-8")
             ).hexdigest()
@@ -64,8 +65,6 @@ def cosine_similarity(
     vector_a: list[float],
     vector_b: list[float],
 ) -> float:
-    """Calculate cosine similarity between two vectors."""
-
     if len(vector_a) != len(vector_b):
         raise ValueError("Vectors must have the same dimensions.")
 
@@ -76,13 +75,9 @@ def cosine_similarity(
     magnitude_a = math.sqrt(sum(a * a for a in vector_a))
     magnitude_b = math.sqrt(sum(b * b for b in vector_b))
 
-    if magnitude_a == 0.0 or magnitude_b == 0.0:
+    if magnitude_a == 0 or magnitude_b == 0:
         return 0.0
 
     similarity = dot_product / (magnitude_a * magnitude_b)
 
-    # Protect against floating-point precision issues.
     return max(0.0, min(1.0, similarity))
-
-
-__all__ = ["BowEmbedder", "cosine_similarity"]

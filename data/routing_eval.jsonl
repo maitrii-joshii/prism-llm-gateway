@@ -1,0 +1,20 @@
+{"prompt":"What does HTTP stand for?","expected_tier":"fast"}
+{"prompt":"List three advantages of PostgreSQL.","expected_tier":"fast"}
+{"prompt":"Translate good morning into German.","expected_tier":"fast"}
+{"prompt":"Define the term load balancing.","expected_tier":"fast"}
+{"prompt":"What is the default port for PostgreSQL?","expected_tier":"fast"}
+{"prompt":"Prove that there are infinitely many prime numbers.","expected_tier":"smart"}
+{"prompt":"Why can a distributed transaction fail?","expected_tier":"smart"}
+{"prompt":"Compare optimistic and pessimistic concurrency control.","expected_tier":"smart"}
+{"prompt":"Analyze the race condition in this code.","expected_tier":"smart"}
+{"prompt":"Design a fault-tolerant payment processing system.","expected_tier":"smart"}
+{"prompt":"Calculate the time complexity of merge sort.","expected_tier":"smart"}
+{"prompt":"Explain step by step how a database deadlock can occur.","expected_tier":"smart"}
+{"prompt":"What is the capital of Japan? Please provide a short factual answer. I only need the city name and nothing else.","expected_tier":"fast"}
+{"prompt":"Summarize the following information about web development: HTML structures pages, CSS controls presentation, JavaScript adds interactivity, and browsers execute these technologies to display websites. Keep the summary concise and do not provide technical analysis or additional examples.","expected_tier":"fast"}
+{"prompt":"Explain why a distributed system can experience a split-brain condition and analyze how quorum-based consensus helps prevent inconsistent writes.","expected_tier":"smart"}
+{"prompt":"Debug this code and explain why it produces an incorrect result:\n```python\ndef average(values):\n    return sum(values) / len(values)\n```","expected_tier":"smart"}
+{"prompt":"Identify the programming language used in this statement: print('Hello World')","expected_tier":"fast"}
+{"prompt":"Convert 25 Celsius into Fahrenheit.","expected_tier":"fast"}
+{"prompt":"Derive the recurrence relation for merge sort and solve it using the Master Theorem.","expected_tier":"smart"}
+{"prompt":"First explain database indexing, then compare B-tree and hash indexes, and finally analyze their performance trade-offs.","expected_tier":"smart"}

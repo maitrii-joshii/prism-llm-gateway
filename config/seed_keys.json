@@ -9,10 +9,9 @@
       "llama-3.3-70b-versatile"
     ],
     "cache_enabled": true,
-    "cache_threshold": 0.8,
+    "cache_threshold": 0.85,
     "status": "active"
   },
-
   {
     "key": "prism-demo-rate-limit-10",
     "tenant_id": "tenant-demo",
@@ -22,7 +21,7 @@
       "gpt-4o-mini"
     ],
     "cache_enabled": false,
-    "cache_threshold": 0.8,
+    "cache_threshold": 0.85,
     "status": "active"
- }
+  }
 ]
