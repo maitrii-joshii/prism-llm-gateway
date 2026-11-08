@@ -26,6 +26,7 @@ from prism.services.streaming import stream_response
 from prism.services.stages.auth import authenticate_request
 from prism.services.stages.allowlist import enforce_model_allowlist
 from prism.services.stages.budget import enforce_budget
+from prism.services.stages.cache import create_cache_stage
 from prism.services.stages.rate_limiter import enforce_rate_limit
 from prism.services.stages.resolve import (
     get_gateway_config,
@@ -55,7 +56,6 @@ class ModelBoundProvider:
         self,
         request: dict[str, Any],
     ) -> ProviderResponse:
-        """Forward a completion request using the bound model."""
         provider_request = request.copy()
         provider_request["model"] = self.model_name
         return await self.adapter.complete(provider_request)
@@ -64,7 +64,6 @@ class ModelBoundProvider:
         self,
         request: dict[str, Any],
     ) -> AsyncIterator[dict[str, Any]]:
-        """Forward a streaming request using the bound model."""
         provider_request = request.copy()
         provider_request["model"] = self.model_name
         return self.adapter.stream(provider_request)
@@ -92,7 +91,6 @@ def save_request_log(
             else None
         )
 
-        # Hash rejected authentication attempts; never store raw keys.
         if key_hash is None:
             raw_key = request.headers.get("x-api-key")
             if raw_key and raw_key.strip():
@@ -257,22 +255,88 @@ def build_streaming_headers(
     context: RequestContext,
 ) -> dict[str, str]:
     """Build response headers before streaming starts."""
-    if not context.provider_name or not context.model_resolved:
-        raise UpstreamError(
-            "Provider and model must be resolved before streaming."
-        )
+    if context.cache_status != "hit":
+        if not context.provider_name or not context.model_resolved:
+            raise UpstreamError(
+                "Provider and model must be resolved before streaming."
+            )
 
-    return {
+    headers = {
         "x-prism-request-id": context.request_id,
-        "x-prism-provider": (
-            f"{context.provider_name}/{context.model_resolved}"
-        ),
-        "x-prism-cache": "miss",
+        "x-prism-cache": context.cache_status,
         "x-prism-fallback": str(context.fallback_used).lower(),
-        "x-prism-cost-usd": "0",
+        "x-prism-cost-usd": format(context.cost_usd, "g"),
         "Cache-Control": "no-cache",
         "X-Accel-Buffering": "no",
     }
+
+    if context.provider_name and context.model_resolved:
+        headers["x-prism-provider"] = (
+            f"{context.provider_name}/{context.model_resolved}"
+        )
+
+    return headers
+
+
+async def format_cached_streaming_body(
+    context: RequestContext,
+    request: Request,
+    log_repository: Any,
+    request_started_at: float,
+) -> AsyncIterator[str]:
+    """Replay a cached completion as one SSE content chunk."""
+    status_code = 200
+
+    try:
+        result = context.provider_response
+
+        if result is None:
+            raise UpstreamError(
+                "Cached streaming response is missing."
+            )
+
+        chunk = {
+            "id": f"chatcmpl-{uuid4().hex}",
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": result.model,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "content": result.content,
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        yield f"data: {json.dumps(chunk)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    except (asyncio.CancelledError, GeneratorExit):
+        status_code = 499
+        context.decision_trace.append(
+            "client disconnected during cached streaming"
+        )
+        raise
+
+    except Exception:
+        status_code = 502
+        context.decision_trace.append(
+            "cached streaming response failed"
+        )
+        raise
+
+    finally:
+        save_request_log(
+            request=request,
+            context=context,
+            log_repository=log_repository,
+            status_code=status_code,
+            request_started_at=request_started_at,
+        )
 
 
 async def format_streaming_body(
@@ -284,8 +348,9 @@ async def format_streaming_body(
     request: Request,
     log_repository: Any,
     request_started_at: float,
+    cache_service: Any = None,
 ) -> AsyncIterator[str]:
-    """Forward SSE chunks and persist the final streaming request log."""
+    """Forward SSE chunks, cache successful streams, and save request logs."""
     streaming_generator = stream_response(
         provider_stream=provider_stream,
         context=context,
@@ -296,6 +361,9 @@ async def format_streaming_body(
 
     status_code = 200
     client_disconnected = False
+    response_parts: list[str] = []
+    finish_reason: str | None = None
+    stream_completed = False
 
     try:
         async for formatted_chunk in streaming_generator:
@@ -322,14 +390,34 @@ async def format_streaming_body(
                 ):
                     status_code = 502
 
+                choices = event.get("choices", [])
+                if isinstance(choices, list):
+                    for choice in choices:
+                        if not isinstance(choice, dict):
+                            continue
+
+                        delta = choice.get("delta", {})
+                        if isinstance(delta, dict):
+                            content = delta.get("content")
+                            if isinstance(content, str):
+                                response_parts.append(content)
+
+                        reason = choice.get("finish_reason")
+                        if isinstance(reason, str):
+                            finish_reason = reason
+
                 if event.get("done") is True:
                     is_done_event = True
+                    stream_completed = status_code == 200
 
             if is_done_event:
                 yield "data: [DONE]\n\n"
                 continue
 
             yield formatted_chunk
+
+        if status_code == 200:
+            stream_completed = True
 
     except (asyncio.CancelledError, GeneratorExit):
         client_disconnected = True
@@ -360,6 +448,7 @@ async def format_streaming_body(
             )
             if status_code == 200:
                 status_code = 502
+                stream_completed = False
                 context.decision_trace.append(
                     "stream cleanup failed"
                 )
@@ -369,6 +458,35 @@ async def format_streaming_body(
                     "stream terminated by client disconnect"
                 )
 
+            if (
+                stream_completed
+                and cache_service is not None
+                and context.key_config is not None
+                and context.key_config.cache_enabled
+                and context.stream_prompt_tokens >= 0
+                and context.stream_completion_tokens >= 0
+            ):
+                try:
+                    cached_response = ProviderResponse(
+                        content="".join(response_parts),
+                        model=context.model_resolved or "",
+                        prompt_tokens=context.stream_prompt_tokens,
+                        completion_tokens=context.stream_completion_tokens,
+                        total_tokens=(
+                            context.stream_prompt_tokens
+                            + context.stream_completion_tokens
+                        ),
+                        finish_reason=finish_reason or "stop",
+                        raw_response={"source": "stream"},
+                    )
+                    context.provider_response = cached_response
+                    cache_service.store_response(context)
+                except Exception:
+                    logger.exception(
+                        "Failed to store completed stream in semantic cache",
+                        extra={"request_id": context.request_id},
+                    )
+
             save_request_log(
                 request=request,
                 context=context,
@@ -376,6 +494,32 @@ async def format_streaming_body(
                 status_code=status_code,
                 request_started_at=request_started_at,
             )
+
+
+def record_usage_for_completion(
+    context: RequestContext,
+    usage_repository: Any,
+) -> None:
+    """Record usage for non-streaming requests and cache hits."""
+    if context.provider_response is None:
+        return
+
+    if context.key_config is None:
+        raise UpstreamError(
+            "Authenticated key configuration is missing."
+        )
+
+    usage_repository.record_usage(
+        key_hash=context.key_config.key_hash,
+        month=context.start_time.strftime("%Y-%m"),
+        cost=context.cost_usd,
+        tokens=context.provider_response.total_tokens,
+        is_cache_hit=context.cache_status == "hit",
+    )
+
+    context.decision_trace.append(
+        f"usage recorded: {context.provider_response.total_tokens} tokens"
+    )
 
 
 @router.post("/v1/chat/completions")
@@ -392,12 +536,10 @@ async def chat_completions(
         "key_repository",
         None,
     )
-
     if key_repository is None:
         raise UpstreamError("Key repository is not configured")
 
     clock = getattr(request.app.state, "clock", None)
-
     if clock is None:
         raise UpstreamError("Clock is not configured")
 
@@ -406,7 +548,6 @@ async def chat_completions(
         "rate_limiter",
         None,
     )
-
     if rate_limiter is None:
         raise UpstreamError("Rate limiter is not configured")
 
@@ -415,13 +556,17 @@ async def chat_completions(
         "usage_repository",
         None,
     )
-
     if usage_repository is None:
         raise UpstreamError("Usage repository is not configured")
 
     log_repository = getattr(
         request.app.state,
         "log_repository",
+        None,
+    )
+    cache_service = getattr(
+        request.app.state,
+        "cache_service",
         None,
     )
 
@@ -461,7 +606,6 @@ async def chat_completions(
         )
 
         stream = validated_payload.get("stream", False)
-
         if not isinstance(stream, bool):
             raise InvalidRequestError(
                 "'stream' must be a boolean."
@@ -471,7 +615,6 @@ async def chat_completions(
         context.model_requested = validated_payload["model"]
         context.messages = validated_payload["messages"]
         context.stream = stream
-
         context.decision_trace.append("request validation ok")
 
         return context
@@ -484,7 +627,6 @@ async def chat_completions(
             "loaded_config",
             None,
         )
-
         if loaded_config is None:
             raise UpstreamError(
                 "Gateway configuration is not loaded"
@@ -519,26 +661,31 @@ async def chat_completions(
     async def provider_call_stage(
         context: RequestContext,
     ) -> RequestContext:
+        # A cache hit already has a complete response.
+        if context.cache_status == "hit":
+            context.cost_usd = 0.0
+            context.decision_trace.append(
+                "provider execution skipped: semantic cache hit"
+            )
+            return context
+
         loaded_config = getattr(
             request.app.state,
             "loaded_config",
             None,
         )
-
         if loaded_config is None:
             raise UpstreamError(
                 "Gateway configuration is not loaded"
             )
 
         # Streaming uses the resolved primary provider.
-        # Automatic streaming failover is intentionally not implemented.
         if context.stream:
             primary_model = context.model_candidates[0]
             adapters = get_provider_adapters(request)
 
             if adapters:
                 adapter = adapters.get(primary_model)
-
                 if adapter is None:
                     raise UpstreamError(
                         f"No provider configured for model "
@@ -555,14 +702,12 @@ async def chat_completions(
                 context.provider_name = "alpha"
 
             context.model_resolved = primary_model
-
             context.request_payload = context.request_payload.copy()
             context.request_payload["model"] = primary_model
 
             context.decision_trace.append(
                 f"streaming provider {context.provider_name} selected"
             )
-
             logger.info(
                 "Starting provider streaming request",
                 extra={
@@ -571,16 +716,13 @@ async def chat_completions(
                     "provider": context.provider_name,
                 },
             )
-
             return context
 
         # Non-streaming path: retry and failover execution.
         adapters = get_provider_adapters(request)
 
         if not adapters:
-            # Backward compatibility for single-provider tests.
             adapter = get_provider_adapter(request)
-
             context.provider_name = "alpha"
             context.decision_trace.append(
                 "legacy single provider selected"
@@ -598,7 +740,6 @@ async def chat_completions(
 
             for model_name in context.model_candidates:
                 adapter = adapters.get(model_name)
-
                 if adapter is None:
                     raise UpstreamError(
                         f"No provider configured for model "
@@ -610,7 +751,6 @@ async def chat_completions(
                     model_name,
                     adapter,
                 )
-
                 providers.append(
                     ModelBoundProvider(
                         adapter=adapter,
@@ -624,44 +764,34 @@ async def chat_completions(
                 "settings",
                 None,
             )
-
             gateway_config = get_gateway_config(loaded_config)
-
-            max_retries = gateway_config.max_retries
-            request_timeout = (
-                gateway_config.provider_timeout_seconds
-            )
-
-            connect_timeout = getattr(
-                settings,
-                "connect_timeout_seconds",
-                5.0,
-            )
-
-            base_delay = getattr(
-                settings,
-                "retry_base_delay_seconds",
-                1.0,
-            )
 
             executor = ResilientExecutor(
                 providers=providers,
-                max_retries=max_retries,
-                base_delay=base_delay,
-                connect_timeout=connect_timeout,
-                request_timeout=request_timeout,
+                max_retries=gateway_config.max_retries,
+                base_delay=getattr(
+                    settings,
+                    "retry_base_delay_seconds",
+                    1.0,
+                ),
+                connect_timeout=getattr(
+                    settings,
+                    "connect_timeout_seconds",
+                    5.0,
+                ),
+                request_timeout=(
+                    gateway_config.provider_timeout_seconds
+                ),
             )
 
             context.decision_trace.append(
                 "resilient provider execution started"
             )
-
             execution_result = await executor.execute(
                 context.request_payload
             )
 
             result = execution_result.response
-
             context.provider_response = result
             context.provider_name = execution_result.provider_name
             context.model_resolved = result.model
@@ -674,7 +804,6 @@ async def chat_completions(
             context.decision_trace.append(
                 f"retry count: {context.retry_count}"
             )
-
             if context.fallback_used:
                 context.decision_trace.append(
                     "fallback provider used"
@@ -687,40 +816,44 @@ async def chat_completions(
         pricing = get_model_pricing(loaded_config).get(
             context.model_resolved
         )
-
         if pricing is None:
             raise UpstreamError(
                 f"No pricing configured for provider-returned "
                 f"model '{context.model_resolved}'."
             )
 
-        cost = CostCalculator.calculate(
+        context.cost_usd = CostCalculator.calculate(
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
             model_pricing=pricing,
         )
 
-        context.cost_usd = cost
-
-        if context.key_config is None:
-            raise UpstreamError(
-                "Authenticated key configuration is missing."
-            )
-
-        month = context.start_time.strftime("%Y-%m")
-
-        usage_repository.record_usage(
-            key_hash=context.key_config.key_hash,
-            month=month,
-            cost=cost,
-            tokens=result.total_tokens,
-            is_cache_hit=context.cache_status == "hit",
-        )
+        if cache_service is not None:
+            try:
+                cache_service.store_response(context)
+            except Exception:
+                logger.exception(
+                    "Failed to store response in semantic cache",
+                    extra={"request_id": context.request_id},
+                )
 
         context.decision_trace.append(
-            f"cost: ${cost:.6f}"
+            f"cost: ${context.cost_usd:.6f}"
         )
+        return context
 
+    async def meter_stage(
+        context: RequestContext,
+    ) -> RequestContext:
+        # Streaming misses are metered when their stream completes.
+        # Cache hits are metered here using the cached token counts.
+        if context.stream and context.cache_status != "hit":
+            return context
+
+        record_usage_for_completion(
+            context,
+            usage_repository,
+        )
         return context
 
     stages = [
@@ -730,8 +863,15 @@ async def chat_completions(
         model_resolution_stage,
         allowlist_stage,
         budget_stage,
-        provider_call_stage,
     ]
+
+    if cache_service is not None:
+        stages.append(create_cache_stage(cache_service))
+
+    stages.extend([
+        provider_call_stage,
+        meter_stage,
+    ])
 
     pipeline = getattr(
         request.app.state,
@@ -739,7 +879,6 @@ async def chat_completions(
         None,
     ) or Pipeline()
 
-    # Log pipeline failures before re-raising the original exception.
     try:
         context = await pipeline.run(
             context,
@@ -750,7 +889,6 @@ async def chat_completions(
         context.decision_trace.append(
             f"request failed: {exc.error_type}"
         )
-
         save_request_log(
             request=request,
             context=context,
@@ -758,14 +896,12 @@ async def chat_completions(
             status_code=exc.status_code,
             request_started_at=request_started_at,
         )
-
         raise
 
     except Exception:
         context.decision_trace.append(
             "request failed: internal_error"
         )
-
         save_request_log(
             request=request,
             context=context,
@@ -773,7 +909,6 @@ async def chat_completions(
             status_code=500,
             request_started_at=request_started_at,
         )
-
         raise
 
     logger.info(
@@ -787,6 +922,22 @@ async def chat_completions(
 
     # Streaming response path.
     if context.stream:
+        headers = build_streaming_headers(context)
+
+        if context.cache_status == "hit":
+            cached_stream = format_cached_streaming_body(
+                context=context,
+                request=request,
+                log_repository=log_repository,
+                request_started_at=request_started_at,
+            )
+            return StreamingResponse(
+                cached_stream,
+                status_code=200,
+                media_type="text/event-stream",
+                headers=headers,
+            )
+
         loaded_config = request.app.state.loaded_config
         adapters = get_provider_adapters(request)
 
@@ -794,8 +945,6 @@ async def chat_completions(
             adapter = adapters[context.model_resolved]
         else:
             adapter = get_provider_adapter(request)
-
-        headers = build_streaming_headers(context)
 
         provider_stream = adapter.stream(
             context.request_payload
@@ -810,6 +959,7 @@ async def chat_completions(
             request=request,
             log_repository=log_repository,
             request_started_at=request_started_at,
+            cache_service=cache_service,
         )
 
         return StreamingResponse(
@@ -824,7 +974,6 @@ async def chat_completions(
         context.decision_trace.append(
             "request failed: missing provider response"
         )
-
         save_request_log(
             request=request,
             context=context,
@@ -832,7 +981,6 @@ async def chat_completions(
             status_code=502,
             request_started_at=request_started_at,
         )
-
         raise UpstreamError(
             "Pipeline completed without a provider response"
         )

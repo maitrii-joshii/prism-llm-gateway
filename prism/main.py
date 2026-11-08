@@ -6,8 +6,10 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 
+from prism.adapters.bow_embedder import BowEmbedder
 from prism.adapters.openai_compatible import OpenAICompatibleProvider
 from prism.adapters.sqlite_repos import (
+    CacheRepository,
     SQLiteKeyRepository,
     SQLiteLogRepository,
     SQLiteUsageRepository,
@@ -29,6 +31,7 @@ from prism.config.settings import PROJECT_ROOT, Settings
 from prism.config.loader import load_configuration
 from prism.domain.errors import PrismError
 from prism.domain.limiter import TokenBucketRateLimiter
+from prism.services.cache import CacheService
 from prism.services.pipeline import Pipeline
 
 
@@ -54,6 +57,15 @@ async def lifespan(app: FastAPI):
 
     usage_repository = SQLiteUsageRepository(database_path)
     log_repository = SQLiteLogRepository(database_path)
+
+    # Initialize semantic cache components.
+    cache_repository = CacheRepository(database_path)
+    cache_embedder = BowEmbedder()
+
+    cache_service = CacheService(
+        embedder=cache_embedder,
+        repository=cache_repository,
+    )
 
     # Initialize shared services.
     clock = SystemClock()
@@ -101,6 +113,11 @@ async def lifespan(app: FastAPI):
     app.state.log_repository = log_repository
     app.state.database_path = database_path
 
+    # Semantic cache dependencies.
+    app.state.cache_repository = cache_repository
+    app.state.cache_embedder = cache_embedder
+    app.state.cache_service = cache_service
+
     app.state.pipeline = Pipeline()
     app.state.clock = clock
     app.state.rate_limiter = rate_limiter
@@ -120,6 +137,7 @@ async def lifespan(app: FastAPI):
             "max_retries": settings.max_retries,
             "connect_timeout": settings.connect_timeout_seconds,
             "request_timeout": settings.provider_timeout_seconds,
+            "semantic_cache_enabled": True,
         },
     )
 

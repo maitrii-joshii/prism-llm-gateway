@@ -1,12 +1,20 @@
 """SQLite database initialization and repository implementations for Prism."""
 
+import hashlib
 import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Union
+from typing import Union, Any
 
-from prism.domain.models import LogEntry, MonthlyUsage, VirtualKeyConfig
+from prism.adapters.bow_embedder import cosine_similarity
+from prism.domain.models import (
+    CacheEntry,
+    CacheStats,
+    LogEntry,
+    MonthlyUsage,
+    VirtualKeyConfig,
+)
 from prism.domain.security import hash_api_key
 from prism.ports.repositories import (
     KeyRepository,
@@ -550,3 +558,218 @@ class SQLiteLogRepository(LogRepository):
                 else datetime.now(timezone.utc)
             ),
         )
+
+
+class CacheRepository:
+    """SQLite repository for tenant-isolated semantic cache entries."""
+
+    def __init__(self, database_path: DatabasePath) -> None:
+        self.database_path = database_path
+
+    def store(
+        self,
+        key_hash: str,
+        alias: str,
+        embedding: list[float],
+        response_body: dict[str, Any],
+    ) -> None:
+        """Store a cache entry with its embedding and response as JSON."""
+
+        if not key_hash:
+            raise ValueError("key_hash must not be empty.")
+
+        if not alias:
+            raise ValueError("alias must not be empty.")
+
+        if not isinstance(embedding, list) or not all(
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+            for value in embedding
+        ):
+            raise ValueError("embedding must be a list of numbers.")
+
+        if not isinstance(response_body, dict):
+            raise ValueError("response_body must be a dictionary.")
+
+        embedding_json = json.dumps(
+            [float(value) for value in embedding]
+        )
+        response_json = json.dumps(response_body)
+
+        prompt_hash = hashlib.sha256(
+            embedding_json.encode("utf-8")
+        ).hexdigest()
+
+        connection = get_connection(self.database_path)
+
+        try:
+            connection.execute(
+                """
+                INSERT INTO cache_entries (
+                    key_hash,
+                    alias,
+                    prompt_hash,
+                    embedding,
+                    response_body
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    key_hash,
+                    alias,
+                    prompt_hash,
+                    embedding_json,
+                    response_json,
+                ),
+            )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+        finally:
+            connection.close()
+
+    def search(
+        self,
+        key_hash: str,
+        alias: str,
+        embedding: list[float],
+        threshold: float,
+    ) -> CacheEntry | None:
+        """
+        Search only the authenticated key's cache entries.
+
+        Tenant isolation is enforced directly in SQL before
+        candidate embeddings are fetched.
+        """
+
+        if not 0.0 <= threshold <= 1.0:
+            raise ValueError("threshold must be between 0 and 1.")
+
+        if not isinstance(embedding, list) or not all(
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+            for value in embedding
+        ):
+            raise ValueError("embedding must be a list of numbers.")
+
+        connection = get_connection(self.database_path)
+
+        try:
+            rows = connection.execute(
+                """
+                SELECT
+                    id,
+                    key_hash,
+                    alias,
+                    embedding,
+                    response_body,
+                    hit_count,
+                    created_at
+                FROM cache_entries
+                WHERE key_hash = ? AND alias = ?
+                ORDER BY created_at DESC, id DESC
+                """,
+                (key_hash, alias),
+            ).fetchall()
+
+            best_entry = None
+            best_similarity = -1.0
+
+            for row in rows:
+                stored_embedding = json.loads(row[3])
+
+                similarity = cosine_similarity(
+                    [float(value) for value in embedding],
+                    [float(value) for value in stored_embedding],
+                )
+
+                if similarity >= threshold and similarity > best_similarity:
+                    best_similarity = similarity
+                    best_entry = row
+
+            if best_entry is None:
+                return None
+
+            connection.execute(
+                """
+                UPDATE cache_entries
+                SET hit_count = hit_count + 1
+                WHERE id = ? AND key_hash = ?
+                """,
+                (best_entry[0], key_hash),
+            )
+
+            connection.commit()
+
+            return CacheEntry(
+                id=best_entry[0],
+                key_hash=best_entry[1],
+                alias=best_entry[2],
+                embedding=json.loads(best_entry[3]),
+                response_body=json.loads(best_entry[4]),
+                hit_count=best_entry[5] + 1,
+                created_at=(
+                    datetime.fromisoformat(best_entry[6])
+                    if best_entry[6]
+                    else datetime.now(timezone.utc)
+                ),
+            )
+
+        except Exception:
+            connection.rollback()
+            raise
+
+        finally:
+            connection.close()
+
+    def get_stats(
+        self,
+        key_hash: str | None = None,
+    ) -> CacheStats:
+        """Return cache statistics, optionally scoped to one key."""
+
+        connection = get_connection(self.database_path)
+
+        try:
+            if key_hash is None:
+                row = connection.execute(
+                    """
+                    SELECT
+                        COUNT(*),
+                        COALESCE(SUM(hit_count), 0)
+                    FROM cache_entries
+                    """
+                ).fetchone()
+
+            else:
+                row = connection.execute(
+                    """
+                    SELECT
+                        COUNT(*),
+                        COALESCE(SUM(hit_count), 0)
+                    FROM cache_entries
+                    WHERE key_hash = ?
+                    """,
+                    (key_hash,),
+                ).fetchone()
+
+            return CacheStats(
+                total_entries=row[0],
+                total_hits=row[1],
+            )
+
+        finally:
+            connection.close()
+
+
+__all__ = [
+    "create_tables",
+    "get_connection",
+    "init_database",
+    "SQLiteKeyRepository",
+    "SQLiteUsageRepository",
+    "SQLiteLogRepository",
+    "CacheRepository",
+]
