@@ -1,4 +1,4 @@
-"""Heuristic difficulty classification for Prism model routing."""
+"""Difficulty classifiers for Prism model routing."""
 
 import re
 from abc import ABC, abstractmethod
@@ -22,15 +22,43 @@ class DifficultyClassifier(ABC):
         raise NotImplementedError
 
 
+class LengthOnlyClassifier(DifficultyClassifier):
+    """Baseline classifier that uses only prompt length."""
+
+    SMART_THRESHOLD = 200
+
+    def classify(self, prompt: str) -> ClassificationResult:
+        """Classify a prompt using its character count only."""
+
+        if not isinstance(prompt, str):
+            raise TypeError("Prompt must be a string.")
+
+        prompt_length = len(prompt)
+
+        if prompt_length > self.SMART_THRESHOLD:
+            return {
+                "tier": "smart",
+                "score": 1.0,
+                "reason": (
+                    f"prompt length {prompt_length} exceeds "
+                    f"{self.SMART_THRESHOLD} characters"
+                ),
+            }
+
+        return {
+            "tier": "fast",
+            "score": 0.0,
+            "reason": (
+                f"prompt length {prompt_length} is within "
+                f"{self.SMART_THRESHOLD} characters"
+            ),
+        }
+
+
 class HeuristicClassifier(DifficultyClassifier):
     """
-    Classify prompts using hard and easy linguistic signals.
-
-    The score represents the proportion of detected hard signals
-    relative to all detected hard and easy signals.
-
-    A score >= 0.5 selects the smart tier.
-    A score < 0.5 selects the fast tier.
+    Classify prompts using linguistic, code, math, and
+    multi-part instruction signals.
     """
 
     HARD_SIGNALS = [
@@ -44,6 +72,8 @@ class HeuristicClassifier(DifficultyClassifier):
         "step-by-step",
         "reason through",
         "analyze",
+        "compare",
+        "contrast",
         "compare and contrast",
         "design",
         "implement",
@@ -78,9 +108,7 @@ class HeuristicClassifier(DifficultyClassifier):
         r"```[\s\S]*?```|~~~[\s\S]*?~~~"
     )
 
-    INLINE_CODE_PATTERN = re.compile(
-        r"`[^`]+`"
-    )
+    INLINE_CODE_PATTERN = re.compile(r"`[^`]+`")
 
     MATH_PATTERN = re.compile(
         r"(\\frac|\\sqrt|\\sum|\\int|\\lim|"
@@ -92,12 +120,13 @@ class HeuristicClassifier(DifficultyClassifier):
         r"\d+\s*[\^*/]\s*\d+)"
     )
 
-    def classify(self, prompt: str) -> ClassificationResult:
-        """
-        Analyze prompt signals and choose fast or smart routing.
+    MULTI_PART_PATTERN = re.compile(
+        r"\bfirst\b[\s\S]*?\bthen\b[\s\S]*?\bfinally\b",
+        re.IGNORECASE,
+    )
 
-        Prompt length alone does not determine difficulty.
-        """
+    def classify(self, prompt: str) -> ClassificationResult:
+        """Analyze prompt signals and choose fast or smart routing."""
 
         if not isinstance(prompt, str):
             raise TypeError("Prompt must be a string.")
@@ -127,10 +156,15 @@ class HeuristicClassifier(DifficultyClassifier):
             hard_matches.append("inline code")
             reasons.append("inline code")
 
-        # Mathematical notation is another complexity signal.
+        # Mathematical notation indicates possible complexity.
         if self.MATH_PATTERN.search(prompt):
             hard_matches.append("math notation")
             reasons.append("math notation")
+
+        # Detect multi-part instructions as a combined signal.
+        if self.MULTI_PART_PATTERN.search(prompt):
+            hard_matches.append("multi-part instructions")
+            reasons.append("multi-part instructions")
 
         hard_count = len(hard_matches)
         easy_count = len(easy_matches)
@@ -143,16 +177,16 @@ class HeuristicClassifier(DifficultyClassifier):
 
         score = round(score, 2)
 
-        tier = "smart" if score >= 0.5 and hard_count > 0 else "fast"
+        tier = (
+            "smart"
+            if score >= 0.5 and hard_count > 0
+            else "fast"
+        )
 
         if tier == "smart":
-            reason = (
-                f"{'; '.join(reasons)}; judged complex"
-            )
+            reason = f"{'; '.join(reasons)}; judged complex"
         elif easy_matches:
-            reason = (
-                f"{'; '.join(easy_matches)}; judged simple"
-            )
+            reason = f"{'; '.join(easy_matches)}; judged simple"
         else:
             reason = "no strong difficulty signals; defaulted to fast"
 
@@ -178,5 +212,6 @@ class HeuristicClassifier(DifficultyClassifier):
 __all__ = [
     "ClassificationResult",
     "DifficultyClassifier",
+    "LengthOnlyClassifier",
     "HeuristicClassifier",
 ]
