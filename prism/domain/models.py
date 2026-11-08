@@ -20,7 +20,7 @@ class VirtualKeyConfig(BaseModel):
 
 
 class ProviderResponse(BaseModel):
-    """Normalized response returned by an LLM provider."""
+    """Normalized response returned by a provider."""
 
     content: str
     model: str
@@ -41,30 +41,21 @@ class RequestContext(BaseModel):
     model_resolved: str | None = None
     provider_name: str | None = None
 
-    # Ordered models: primary model followed by permitted fallbacks.
     model_candidates: list[str] = Field(default_factory=list)
-
-    # Total number of retry attempts performed by the executor.
     retry_count: int = Field(default=0, ge=0)
 
     messages: list[dict[str, Any]] = Field(default_factory=list)
     stream: bool = False
 
-    # Preserve the complete original request for provider forwarding.
     request_payload: dict[str, Any] = Field(default_factory=dict)
-
-    # Store the normalized provider response after provider execution.
     provider_response: ProviderResponse | None = None
 
-    # Token usage observed while processing a streaming response.
-    # These values are updated as usage information arrives from the provider.
     stream_prompt_tokens: int = Field(default=0, ge=0)
     stream_completion_tokens: int = Field(default=0, ge=0)
 
     decision_trace: list[str] = Field(default_factory=list)
     start_time: datetime
 
-    # Response metadata used to populate Prism response headers.
     cache_status: str = "miss"
     fallback_used: bool = False
     cost_usd: float = Field(default=0.0, ge=0)
@@ -95,6 +86,27 @@ class LogEntry(BaseModel):
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+
+
+class CacheEntry(BaseModel):
+    """A semantic cache entry belonging to one virtual API key."""
+
+    id: int | None = None
+    key_hash: str
+    alias: str
+    embedding: list[float]
+    response_body: dict[str, Any]
+    hit_count: int = Field(default=0, ge=0)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+
+class CacheStats(BaseModel):
+    """Aggregated semantic cache statistics."""
+
+    total_entries: int = Field(default=0, ge=0)
+    total_hits: int = Field(default=0, ge=0)
 
 
 class ModelPricing(BaseModel):
@@ -156,4 +168,6 @@ __all__ = [
     "UsageRecord",
     "MonthlyUsage",
     "LogEntry",
+    "CacheEntry",
+    "CacheStats",
 ]
