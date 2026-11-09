@@ -23,14 +23,14 @@ async def enforce_model_allowlist(
 
     requested_model = context.model_requested.strip()
 
-    # Check the original requested model or alias.
-    if requested_model not in allowed_models:
+    # Explicitly require permission to use automatic routing.
+    if requested_model == "auto" and requested_model not in allowed_models:
         context.decision_trace.append("model not allowed")
         raise ModelNotAllowedError(
-            f"Model '{requested_model}' is not allowed for this API key."
+            "Model 'auto' is not allowed for this API key."
         )
 
-    # For auto routing, also check the classifier-selected tier.
+    # For auto routing, check the classifier-selected tier.
     if requested_model == "auto":
         selected_tier = next(
             (
@@ -57,7 +57,7 @@ async def enforce_model_allowlist(
                 "for this API key."
             )
 
-    # Check all resolved primary and fallback model candidates.
+    # Validate every resolved primary and fallback model.
     requested_models = (
         context.model_candidates
         if context.model_candidates

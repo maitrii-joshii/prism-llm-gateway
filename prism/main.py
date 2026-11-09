@@ -151,6 +151,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+# Health check endpoint for Docker and monitoring.
+@app.get("/health", tags=["Health"])
+async def health_check():
+    """Return application health status."""
+    return {"status": "ok"}
+
+
 # Register request ID middleware.
 app.middleware("http")(request_id_middleware)
 

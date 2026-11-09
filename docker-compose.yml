@@ -1,0 +1,90 @@
+services:
+  alpha-mock:
+    image: python:3.12-slim
+    container_name: prism-alpha-mock
+    working_dir: /app
+    volumes:
+      - ./scripts:/app/scripts:ro
+    command:
+      - sh
+      - -c
+      - pip install --no-cache-dir fastapi uvicorn && python scripts/mock_provider.py --port 9001 --name alpha
+    ports:
+      - "9001:9001"
+    networks:
+      - prism-network
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:9001/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  beta-mock:
+    image: python:3.12-slim
+    container_name: prism-beta-mock
+    working_dir: /app
+    volumes:
+      - ./scripts:/app/scripts:ro
+    command:
+      - sh
+      - -c
+      - pip install --no-cache-dir fastapi uvicorn && python scripts/mock_provider.py --port 9002 --name beta
+    ports:
+      - "9002:9002"
+    networks:
+      - prism-network
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:9002/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  prism-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: prism-gateway
+    ports:
+      - "3000:3000"
+    volumes:
+      - prism-data:/app/data
+      - ./config:/app/config:ro
+    env_file:
+      - .env
+    environment:
+      PORT: "3000"
+      PRISM_PORT: "3000"
+      PRISM_CONFIG_DIR: /app/config
+      PRISM_DB_PATH: /app/data/prism.db
+      PRISM_LOG_LEVEL: INFO
+      OPENAI_API_KEY: mock-alpha-key
+      OPENAI_BASE_URL: http://alpha-mock:9001/v1
+      GROQ_API_KEY: mock-beta-key
+      GROQ_BASE_URL: http://beta-mock:9002/v1
+    depends_on:
+      alpha-mock:
+        condition: service_healthy
+      beta-mock:
+        condition: service_healthy
+    networks:
+      - prism-network
+    restart: unless-stopped
+
+volumes:
+  prism-data:
+    driver: local
+
+networks:
+  prism-network:
+    driver: bridge
