@@ -16,6 +16,7 @@ from prism.adapters.sqlite_repos import (
     init_database,
 )
 from prism.adapters.system_clock import SystemClock
+from prism.api.admin import router as admin_router
 from prism.api.error_handler import (
     prism_error_handler,
     unexpected_error_handler,
@@ -82,7 +83,7 @@ async def lifespan(app: FastAPI):
             "GROQ_API_KEY is missing. Add it to your .env file."
         )
 
-    # Initialize OpenAI provider.
+    # Initialize OpenAI-compatible provider.
     openai_provider = OpenAICompatibleProvider(
         base_url=settings.openai_base_url,
         api_key=settings.openai_api_key,
@@ -122,11 +123,10 @@ async def lifespan(app: FastAPI):
     app.state.clock = clock
     app.state.rate_limiter = rate_limiter
 
-    # New multi-provider configuration.
+    # Multi-provider configuration.
     app.state.provider_adapters = provider_adapters
 
-    # Keep the old single-provider reference for existing tests
-    # and backward compatibility.
+    # Backward compatibility for existing tests.
     app.state.provider_adapter = openai_provider
 
     logger.info(
@@ -175,6 +175,7 @@ app.add_exception_handler(
 
 # Register API routes.
 app.include_router(router)
+app.include_router(admin_router)
 
 
 if __name__ == "__main__":
