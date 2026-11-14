@@ -33,14 +33,22 @@ class Settings:
     groq_api_key: str | None = None
     groq_base_url: str = "https://api.groq.com/openai/v1"
 
+    # Admin API settings
+    admin_token: str | None = None
+
+    # Database path — overridable via PRISM_DB_PATH
+    db_path: str = str(PROJECT_ROOT / "data" / "prism.db")
+
     @classmethod
     def from_env(cls) -> "Settings":
         """Load .env defaults and then read environment variables."""
 
         load_dotenv(PROJECT_ROOT / ".env", override=False)
 
+        # Default: the unmodified Airtribe starter data (mock providers).
+        # Use PRISM_CONFIG_DIR=config for the real OpenAI/Groq profile.
         config_dir = Path(
-            os.getenv("PRISM_CONFIG_DIR", str(PROJECT_ROOT / "config"))
+            os.getenv("PRISM_CONFIG_DIR", str(PROJECT_ROOT / "data"))
         ).expanduser()
 
         timeout_value = os.getenv("PRISM_PROVIDER_TIMEOUT_SECONDS")
@@ -121,6 +129,11 @@ class Settings:
             groq_base_url=os.getenv(
                 "GROQ_BASE_URL",
                 "https://api.groq.com/openai/v1",
+            ),
+            admin_token=os.getenv("PRISM_ADMIN_TOKEN"),
+            db_path=os.getenv(
+                "PRISM_DB_PATH",
+                str(PROJECT_ROOT / "data" / "prism.db"),
             ),
         )
 

@@ -64,6 +64,36 @@ async def test_rejects_model_not_in_allowlist(context):
 
 
 @pytest.mark.asyncio
+async def test_allows_alias_name_in_allowlist(context):
+    """Allows request when the requested alias itself is in the allowlist."""
+
+    context.model_requested = "fast"
+    context.model_resolved = FAST_MODEL
+    context.model_candidates = [FAST_MODEL, SMART_MODEL]
+    context.key_config.model_allowlist = ["fast"]
+
+    result = await enforce_model_allowlist(context)
+
+    assert result is context
+    assert "model allowlist ok (fast)" in result.decision_trace
+
+
+@pytest.mark.asyncio
+async def test_allows_all_aliases_key_accessing_candidate_models(context):
+    """Allows candidates when the key contains aliases covering all candidates."""
+
+    context.model_requested = "fast"
+    context.model_resolved = FAST_MODEL
+    context.model_candidates = [FAST_MODEL, SMART_MODEL]
+    context.key_config.model_allowlist = ["fast", "smart", "quality"]
+
+    result = await enforce_model_allowlist(context)
+
+    assert result is context
+    assert "model allowlist ok (fast)" in result.decision_trace
+
+
+@pytest.mark.asyncio
 async def test_wildcard_allows_any_model(context):
     """A wildcard allowlist allows any requested model."""
 
@@ -178,3 +208,33 @@ async def test_rejects_auto_when_resolved_fallback_is_not_allowed(context):
         await enforce_model_allowlist(context)
 
     assert "model not allowed" in context.decision_trace
+
+
+@pytest.mark.asyncio
+async def test_allows_alias_name_in_allowlist(context):
+    """Allows request when the requested alias itself is in the allowlist."""
+
+    context.model_requested = "fast"
+    context.model_resolved = FAST_MODEL
+    context.model_candidates = [FAST_MODEL, SMART_MODEL]
+    context.key_config.model_allowlist = ["fast"]
+
+    result = await enforce_model_allowlist(context)
+
+    assert result is context
+    assert "model allowlist ok (fast)" in result.decision_trace
+
+
+@pytest.mark.asyncio
+async def test_allows_all_aliases_key_accessing_candidate_models(context):
+    """Allows candidates when the key contains aliases covering all candidates."""
+
+    context.model_requested = "fast"
+    context.model_resolved = FAST_MODEL
+    context.model_candidates = [FAST_MODEL, SMART_MODEL]
+    context.key_config.model_allowlist = ["fast", "smart", "quality"]
+
+    result = await enforce_model_allowlist(context)
+
+    assert result is context
+    assert "model allowlist ok (fast)" in result.decision_trace

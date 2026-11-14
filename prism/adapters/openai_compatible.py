@@ -59,7 +59,29 @@ class OpenAICompatibleProvider(ProviderAdapter):
         )
 
         self.client = client
+        self._managed_client: httpx.AsyncClient | None = None
         self.last_stream_usage: dict[str, int] | None = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """Get or initialize the reusable HTTP client with connection pooling."""
+        if self.client is not None:
+            return self.client
+        if self._managed_client is None or self._managed_client.is_closed:
+            self._managed_client = httpx.AsyncClient(
+                timeout=self.http_timeout,
+                limits=httpx.Limits(
+                    max_keepalive_connections=20,
+                    max_connections=100,
+                    keepalive_expiry=30.0,
+                ),
+            )
+        return self._managed_client
+
+    async def aclose(self) -> None:
+        """Gracefully close the managed HTTP client connection pool."""
+        if self._managed_client is not None and not self._managed_client.is_closed:
+            await self._managed_client.aclose()
+            self._managed_client = None
 
     def _completion_url(self) -> str:
         """Build the chat completion URL without duplicating /v1."""
@@ -84,23 +106,13 @@ class OpenAICompatibleProvider(ProviderAdapter):
         headers = self._build_headers()
 
         try:
-            if self.client is None:
-                async with httpx.AsyncClient(
-                    timeout=self.http_timeout
-                ) as client:
-                    response = await client.post(
-                        url,
-                        headers=headers,
-                        json=request,
-                        timeout=self.http_timeout,
-                    )
-            else:
-                response = await self.client.post(
-                    url,
-                    headers=headers,
-                    json=request,
-                    timeout=self.http_timeout,
-                )
+            client = self._get_client()
+            response = await client.post(
+                url,
+                headers=headers,
+                json=request,
+                timeout=self.http_timeout,
+            )
 
             response.raise_for_status()
 
@@ -168,29 +180,16 @@ class OpenAICompatibleProvider(ProviderAdapter):
         self.last_stream_usage = None
 
         try:
-            if self.client is None:
-                async with httpx.AsyncClient(
-                    timeout=self.http_timeout
-                ) as client:
-                    async with client.stream(
-                        "POST",
-                        url,
-                        headers=headers,
-                        json=stream_request,
-                        timeout=self.http_timeout,
-                    ) as response:
-                        async for event in self._read_sse_events(response):
-                            yield event
-            else:
-                async with self.client.stream(
-                    "POST",
-                    url,
-                    headers=headers,
-                    json=stream_request,
-                    timeout=self.http_timeout,
-                ) as response:
-                    async for event in self._read_sse_events(response):
-                        yield event
+            client = self._get_client()
+            async with client.stream(
+                "POST",
+                url,
+                headers=headers,
+                json=stream_request,
+                timeout=self.http_timeout,
+            ) as response:
+                async for event in self._read_sse_events(response):
+                    yield event
 
         except httpx.TimeoutException as exc:
             raise UpstreamError(

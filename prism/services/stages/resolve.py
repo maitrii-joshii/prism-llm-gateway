@@ -85,16 +85,20 @@ def resolve_model_candidates(
         score = classification["score"]
         reason = classification["reason"]
 
+        # Config may map tiers to other aliases (route_by_difficulty).
+        auto_routes = getattr(gateway_config, "auto_routes", None) or {}
+        target_alias = auto_routes.get(selected_tier, selected_tier)
+
         context.decision_trace.append(
             f"auto→{selected_tier} "
             f"(score {score:.2f}, {reason})"
         )
 
-        alias_config = aliases.get(selected_tier)
+        alias_config = aliases.get(target_alias)
 
         if alias_config is None:
             raise ModelNotFoundError(
-                f"Automatic routing selected '{selected_tier}', "
+                f"Automatic routing selected '{target_alias}', "
                 "but that alias is not configured."
             )
 

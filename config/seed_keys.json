@@ -5,6 +5,9 @@
     "budget_usd": 100.0,
     "rate_limit_rpm": 60,
     "model_allowlist": [
+      "auto",
+      "fast",
+      "smart",
       "gpt-4o-mini",
       "llama-3.3-70b-versatile"
     ],
@@ -21,6 +24,21 @@
       "gpt-4o-mini"
     ],
     "cache_enabled": false,
+    "cache_threshold": 0.85,
+    "status": "active"
+  },
+  {
+    "key": "prism-sk-alias-demo",
+    "tenant_id": "tenant-alias-demo",
+    "budget_usd": 50.0,
+    "rate_limit_rpm": 120,
+    "model_allowlist": [
+      "auto",
+      "fast",
+      "smart",
+      "quality"
+    ],
+    "cache_enabled": true,
     "cache_threshold": 0.85,
     "status": "active"
   }

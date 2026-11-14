@@ -44,13 +44,21 @@ def context() -> RequestContext:
     )
 
 
-def create_request(api_key: str | None = None) -> Request:
-    """Create a Starlette request with an optional API key header."""
+def create_request(
+    api_key: str | None = None,
+    bearer_token: str | None = None,
+) -> Request:
+    """Create a Starlette request with an optional API key or Bearer header."""
 
     headers = []
 
     if api_key is not None:
         headers.append((b"x-api-key", api_key.encode("utf-8")))
+
+    if bearer_token is not None:
+        headers.append(
+            (b"authorization", f"Bearer {bearer_token}".encode("utf-8"))
+        )
 
     scope = {
         "type": "http",
@@ -207,3 +215,21 @@ async def test_hash_comparison_uses_constant_time_function(
         hash_api_key(RAW_API_KEY),
         key_config.key_hash,
     )
+
+
+@pytest.mark.asyncio
+async def test_valid_api_key_via_bearer_header(context, key_config):
+    """A valid virtual API key passed via Authorization: Bearer must authenticate."""
+
+    repository = Mock()
+    repository.get_by_hash.return_value = key_config
+
+    result = await authenticate_request(
+        create_request(bearer_token=RAW_API_KEY),
+        context,
+        repository,
+    )
+
+    assert result is context
+    assert context.key_config == key_config
+    assert context.decision_trace == ["auth ok"]

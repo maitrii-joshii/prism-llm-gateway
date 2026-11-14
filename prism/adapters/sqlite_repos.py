@@ -17,6 +17,7 @@ from prism.domain.models import (
 )
 from prism.domain.security import hash_api_key
 from prism.ports.repositories import (
+    CacheRepository as CacheRepositoryPort,
     KeyRepository,
     LogRepository,
     UsageRepository,
@@ -87,16 +88,23 @@ def create_tables(connection: sqlite3.Connection) -> None:
 
 
 def get_connection(database_path: DatabasePath) -> sqlite3.Connection:
-    """Open a SQLite connection with a 5-second busy timeout."""
+    """Open a SQLite connection with WAL journal mode and a 5-second busy timeout.
+
+    WAL (Write-Ahead Logging) allows concurrent readers to proceed without being
+    blocked by an active writer, which is critical for a gateway serving many
+    simultaneous async requests.  ``synchronous=NORMAL`` retains crash-safety
+    while allowing the OS to skip a full fsync on every commit.
+    """
 
     connection = sqlite3.connect(
         str(database_path),
         timeout=BUSY_TIMEOUT_MS / 1000,
     )
 
-    connection.execute(
-        f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}"
-    )
+    connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA synchronous=NORMAL")
+    connection.execute("PRAGMA foreign_keys=ON")
 
     return connection
 
@@ -183,7 +191,7 @@ class SQLiteKeyRepository(KeyRepository):
             for key_config in keys_list:
                 connection.execute(
                     """
-                    INSERT OR IGNORE INTO virtual_keys (
+                    INSERT OR REPLACE INTO virtual_keys (
                         key_hash,
                         tenant_id,
                         budget_usd,
@@ -560,11 +568,16 @@ class SQLiteLogRepository(LogRepository):
         )
 
 
-class CacheRepository:
+class CacheRepository(CacheRepositoryPort):
     """SQLite repository for tenant-isolated semantic cache entries."""
 
     def __init__(self, database_path: DatabasePath) -> None:
         self.database_path = database_path
+
+    # Maximum number of cache entries retained across all tenants.
+    # Once exceeded, the oldest entries (by creation time) are evicted
+    # to bound the SQLite file size under sustained use.
+    MAX_CACHE_ENTRIES = 1000
 
     def store(
         self,
@@ -573,7 +586,12 @@ class CacheRepository:
         embedding: list[float],
         response_body: dict[str, Any],
     ) -> None:
-        """Store a cache entry with its embedding and response as JSON."""
+        """Store a cache entry with its embedding and response as JSON.
+
+        After every insert, an eviction step removes the oldest entries if the
+        total entry count exceeds ``MAX_CACHE_ENTRIES``.  This keeps the
+        ``cache_entries`` table (and therefore the SQLite file) bounded in size.
+        """
 
         if not key_hash:
             raise ValueError("key_hash must not be empty.")
@@ -620,6 +638,20 @@ class CacheRepository:
                     embedding_json,
                     response_json,
                 ),
+            )
+
+            # Evict oldest entries when the table exceeds the size cap.
+            # Uses a single DELETE so the eviction is atomic with the insert.
+            connection.execute(
+                """
+                DELETE FROM cache_entries
+                WHERE id IN (
+                    SELECT id FROM cache_entries
+                    ORDER BY created_at ASC
+                    LIMIT MAX(0, (SELECT COUNT(*) FROM cache_entries) - ?)
+                )
+                """,
+                (self.MAX_CACHE_ENTRIES,),
             )
 
             connection.commit()

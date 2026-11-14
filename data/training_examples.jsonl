@@ -1,40 +1,60 @@
-{"prompt":"What is the capital of France?","expected_tier":"fast"}
-{"prompt":"List five popular Python frameworks.","expected_tier":"fast"}
-{"prompt":"Translate hello into Spanish.","expected_tier":"fast"}
-{"prompt":"Summarize the purpose of an API gateway.","expected_tier":"fast"}
-{"prompt":"Extract all email addresses from this text.","expected_tier":"fast"}
-{"prompt":"Define the term database indexing.","expected_tier":"fast"}
-{"prompt":"Who is the creator of Python?","expected_tier":"fast"}
-{"prompt":"Convert 10 kilometers into meters.","expected_tier":"fast"}
-{"prompt":"What is the name of the largest planet?","expected_tier":"fast"}
-{"prompt":"Format this date as YYYY-MM-DD.","expected_tier":"fast"}
-{"prompt":"List three HTTP methods.","expected_tier":"fast"}
-{"prompt":"Summarize this paragraph in two sentences.","expected_tier":"fast"}
-{"prompt":"Identify the programming language used in this snippet.","expected_tier":"fast"}
-{"prompt":"Look up the default port for HTTPS.","expected_tier":"fast"}
-{"prompt":"Spell the word accommodation.","expected_tier":"fast"}
-{"prompt":"Give the date of India's independence.","expected_tier":"fast"}
-{"prompt":"Extract the product names from this list.","expected_tier":"fast"}
-{"prompt":"Translate this sentence into French.","expected_tier":"fast"}
-{"prompt":"Where is the Eiffel Tower located?","expected_tier":"fast"}
-{"prompt":"List the supported file formats.","expected_tier":"fast"}
-{"prompt":"Prove that the square root of 2 is irrational.","expected_tier":"smart"}
-{"prompt":"Derive the time complexity of binary search.","expected_tier":"smart"}
-{"prompt":"Why does a database deadlock occur?","expected_tier":"smart"}
-{"prompt":"Explain the logic behind optimistic locking.","expected_tier":"smart"}
-{"prompt":"Debug this code and identify the root cause.","expected_tier":"smart"}
-{"prompt":"Design a scalable URL shortening service.","expected_tier":"smart"}
-{"prompt":"Analyze the trade-offs between SQL and NoSQL databases.","expected_tier":"smart"}
-{"prompt":"Compare and contrast monolith and microservices architectures.","expected_tier":"smart"}
-{"prompt":"Implement a thread-safe rate limiter.","expected_tier":"smart"}
-{"prompt":"Optimize this database query for better performance.","expected_tier":"smart"}
-{"prompt":"Evaluate the consistency guarantees of distributed databases.","expected_tier":"smart"}
-{"prompt":"Justify the choice of Redis for caching in this system.","expected_tier":"smart"}
-{"prompt":"Calculate the expected time complexity of this algorithm.","expected_tier":"smart"}
-{"prompt":"Solve x^2 + 2x + 1 = 0.","expected_tier":"smart"}
-{"prompt":"Trace the execution flow of this recursive function.","expected_tier":"smart"}
-{"prompt":"Explain step by step how JWT authentication works.","expected_tier":"smart"}
-{"prompt":"Investigate why concurrent requests cause a race condition.","expected_tier":"smart"}
-{"prompt":"Design the architecture for a distributed message queue.","expected_tier":"smart"}
-{"prompt":"Explain the logic of a two-phase commit protocol.","expected_tier":"smart"}
-{"prompt":"Analyze the failure scenarios in this system architecture.","expected_tier":"smart"}
+{"id":"train_001","category":"simple_fact","prompt":"What is the capital of Italy?","expected_tier":"fast"}
+{"id":"train_002","category":"simple_list","prompt":"List five popular Python web frameworks.","expected_tier":"fast"}
+{"id":"train_003","category":"translation","prompt":"Translate hello into Spanish.","expected_tier":"fast"}
+{"id":"train_004","category":"summarization","prompt":"Summarize the purpose of an API gateway in two sentences.","expected_tier":"fast"}
+{"id":"train_005","category":"extraction","prompt":"Extract all phone numbers from this support ticket.","expected_tier":"fast"}
+{"id":"train_006","category":"definition","prompt":"Define the term database indexing.","expected_tier":"fast"}
+{"id":"train_007","category":"simple_fact","prompt":"Who is the creator of Linux?","expected_tier":"fast"}
+{"id":"train_008","category":"conversion","prompt":"Convert 10 kilometers into miles.","expected_tier":"fast"}
+{"id":"train_009","category":"simple_fact","prompt":"What is the name of the largest planet in our solar system?","expected_tier":"fast"}
+{"id":"train_010","category":"formatting","prompt":"Format this date as YYYY-MM-DD: November 12, 2026.","expected_tier":"fast"}
+{"id":"train_011","category":"simple_list","prompt":"List three idempotent HTTP methods.","expected_tier":"fast"}
+{"id":"train_012","category":"summarization","prompt":"Summarize this paragraph in one bullet point.","expected_tier":"fast"}
+{"id":"train_013","category":"identification","prompt":"Identify the programming language used in this snippet: console.log('hi').","expected_tier":"fast"}
+{"id":"train_014","category":"lookup","prompt":"Look up the default port for HTTPS.","expected_tier":"fast"}
+{"id":"train_015","category":"spelling","prompt":"Spell the word accommodation.","expected_tier":"fast"}
+{"id":"train_016","category":"simple_fact","prompt":"Give the date of India's independence.","expected_tier":"fast"}
+{"id":"train_017","category":"extraction","prompt":"Extract the product SKUs from this invoice list.","expected_tier":"fast"}
+{"id":"train_018","category":"translation","prompt":"Translate this greeting into French: Good evening.","expected_tier":"fast"}
+{"id":"train_019","category":"simple_fact","prompt":"Where is the Colosseum located?","expected_tier":"fast"}
+{"id":"train_020","category":"simple_list","prompt":"List the supported image file formats for web browsers.","expected_tier":"fast"}
+{"id":"train_021","category":"rewrite","prompt":"Rewrite this slack message to sound friendly: Please fix the build broken by your commit.","expected_tier":"fast"}
+{"id":"train_022","category":"one_liner","prompt":"Write a one-line git commit message for fixing a typo in the login button.","expected_tier":"fast"}
+{"id":"train_023","category":"definition","prompt":"What does HTTP status code 503 mean?","expected_tier":"fast"}
+{"id":"train_024","category":"trap_long_lookup","prompt":"Below is the sprint schedule: Sprint 1 starts Jan 5 with lead Alice; Sprint 2 starts Jan 19 with lead Bob; Sprint 3 starts Feb 2 with lead Carol; Sprint 4 starts Feb 16 with lead Dave; Sprint 5 starts Mar 2 with lead Eve. Who is leading Sprint 4?","expected_tier":"fast"}
+{"id":"train_025","category":"trap_long_log_extract","prompt":"Log output: 2026-03-10T10:00:01Z INFO service=auth action=login user_id=42 status=200; 2026-03-10T10:01:15Z WARN service=billing latency_ms=920 status=200; 2026-03-10T10:02:00Z ERROR service=billing code=card_declined status=402. What is the timestamp of the WARN entry?","expected_tier":"fast"}
+{"id":"train_026","category":"trap_long_rewrite","prompt":"Rephrase the following customer support note so that it is polite and concise without adding new technical details: 'Your account was locked because you typed the wrong password 5 times in a row. Wait 15 minutes and try again.'","expected_tier":"fast"}
+{"id":"train_027","category":"trap_polysemous_word","prompt":"What is the design of the Olympic rings symbol?","expected_tier":"fast"}
+{"id":"train_028","category":"simple_arithmetic","prompt":"Is 144 divisible by 12?","expected_tier":"fast"}
+{"id":"train_029","category":"simple_fact","prompt":"What is the default port for Redis?","expected_tier":"fast"}
+{"id":"train_030","category":"extraction","prompt":"Extract the domain name from https://docs.python.org/3/library/asyncio.html.","expected_tier":"fast"}
+{"id":"train_031","category":"math_proof","prompt":"Prove that there are infinitely many prime numbers.","expected_tier":"smart"}
+{"id":"train_032","category":"complexity_derivation","prompt":"Derive the time complexity of binary search on a sorted array.","expected_tier":"smart"}
+{"id":"train_033","category":"distributed_systems","prompt":"Why does a database deadlock occur under concurrent transactions?","expected_tier":"smart"}
+{"id":"train_034","category":"concurrency_reasoning","prompt":"Explain the logic behind optimistic concurrency control.","expected_tier":"smart"}
+{"id":"train_035","category":"debugging","prompt":"Debug this code and identify the root cause of the memory leak.","expected_tier":"smart"}
+{"id":"train_036","category":"system_design","prompt":"Design a scalable URL shortening service with analytics and rate limiting.","expected_tier":"smart"}
+{"id":"train_037","category":"tradeoff_analysis","prompt":"Analyze the trade-offs between SQL and NoSQL databases for high-write workloads.","expected_tier":"smart"}
+{"id":"train_038","category":"architecture_comparison","prompt":"Compare and contrast monolith and microservices architectures for a 10-person team.","expected_tier":"smart"}
+{"id":"train_039","category":"implementation","prompt":"Implement a thread-safe token bucket rate limiter in Python.","expected_tier":"smart"}
+{"id":"train_040","category":"optimization","prompt":"Optimize this SQL query for better performance on a 100M-row table.","expected_tier":"smart"}
+{"id":"train_041","category":"distributed_systems","prompt":"Evaluate the consistency guarantees of leaderless distributed databases.","expected_tier":"smart"}
+{"id":"train_042","category":"architecture_justification","prompt":"Justify the choice of Redis Streams over Kafka for a low-volume event pipeline.","expected_tier":"smart"}
+{"id":"train_043","category":"complexity_analysis","prompt":"Calculate the expected time complexity and space complexity of quicksort.","expected_tier":"smart"}
+{"id":"train_044","category":"math_equation","prompt":"Solve x^2 + 2x + 1 = 0 and verify the roots.","expected_tier":"smart"}
+{"id":"train_045","category":"code_tracing","prompt":"Trace the execution flow of this recursive backtracking function.","expected_tier":"smart"}
+{"id":"train_046","category":"step_by_step_reasoning","prompt":"Explain step by step how mutual TLS authentication works.","expected_tier":"smart"}
+{"id":"train_047","category":"concurrency_debugging","prompt":"Why do concurrent requests cause a race condition in read-modify-write counters?","expected_tier":"smart"}
+{"id":"train_048","category":"system_design","prompt":"Design the architecture for a distributed dead-letter message queue.","expected_tier":"smart"}
+{"id":"train_049","category":"protocol_analysis","prompt":"Explain the logic of the two-phase commit protocol and its blocking failure mode.","expected_tier":"smart"}
+{"id":"train_050","category":"failure_analysis","prompt":"Analyze the failure scenarios in an active-active multi-region deployment.","expected_tier":"smart"}
+{"id":"train_051","category":"trap_fermi_estimation","prompt":"Estimate how many electric vehicle chargers are needed in Mumbai. Show your reasoning.","expected_tier":"smart"}
+{"id":"train_052","category":"trap_short_proof","prompt":"Prove or disprove: the product of any three consecutive integers is divisible by 6.","expected_tier":"smart"}
+{"id":"train_053","category":"trap_latency_diagnosis","prompt":"Our service p99 latency spiked after enabling connection pooling. List the most likely causes and how you would confirm each.","expected_tier":"smart"}
+{"id":"train_054","category":"migration_planning","prompt":"Draft a zero-downtime migration plan for splitting a shared Postgres table into tenant shards, including how to roll back.","expected_tier":"smart"}
+{"id":"train_055","category":"algorithm_complexity","prompt":"Write an algorithm to find the longest increasing subsequence in O(n log n) time and explain how it works.","expected_tier":"smart"}
+{"id":"train_056","category":"quorum_consensus","prompt":"Explain what consistency guarantees a quorum system with N=5, R=3, W=3 provides during a network partition.","expected_tier":"smart"}
+{"id":"train_057","category":"multi_part_instruction","prompt":"First explain write-ahead logging, then compare WAL with shadow paging, and finally analyze their crash recovery trade-offs.","expected_tier":"smart"}
+{"id":"train_058","category":"code_block_debugging","prompt":"Debug this Python function:\n```python\ndef append_item(item, target=[]):\n    target.append(item)\n    return target\n```","expected_tier":"smart"}
+{"id":"train_059","category":"recurrence_math","prompt":"Derive the recurrence relation for Karatsuba multiplication and solve it using the Master Theorem.","expected_tier":"smart"}
+{"id":"train_060","category":"causal_mechanisms","prompt":"Why can adding retries worsen an upstream outage? Give three plausible mechanisms and mitigations.","expected_tier":"smart"}

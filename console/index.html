@@ -1,0 +1,1249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Prism — Ops Console</title>
+  <style>
+    /* ── Reset & Variables ───────────────────────────────── */
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface-hover: #22252f;
+      --border: #2a2d3a;
+      --text: #e4e4e7;
+      --text-muted: #8b8d98;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --green: #22c55e;
+      --green-bg: rgba(34, 197, 94, 0.12);
+      --red: #ef4444;
+      --red-bg: rgba(239, 68, 68, 0.12);
+      --yellow: #eab308;
+      --yellow-bg: rgba(234, 179, 8, 0.12);
+      --blue: #3b82f6;
+      --blue-bg: rgba(59, 130, 246, 0.12);
+      --radius: 8px;
+      --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+        sans-serif;
+      --mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    /* ── Layout ──────────────────────────────────────────── */
+    .app-header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo svg {
+      width: 28px;
+      height: 28px;
+    }
+
+    .logo h1 {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .logo span {
+      color: var(--text-muted);
+      font-weight: 400;
+      font-size: 14px;
+      margin-left: 4px;
+    }
+
+    .header-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .main {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 24px 32px 48px;
+    }
+
+    /* ── Auth Bar ────────────────────────────────────────── */
+    .auth-bar {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .auth-bar label {
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+      color: var(--text-muted);
+    }
+
+    .auth-bar input {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .auth-bar input:focus {
+      border-color: var(--accent);
+    }
+
+    .auth-bar input::placeholder {
+      color: var(--text-muted);
+      opacity: 0.5;
+    }
+
+    /* ── Buttons ─────────────────────────────────────────── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+
+    .btn:hover {
+      background: var(--surface-hover);
+      border-color: var(--accent);
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-hover);
+      border-color: var(--accent-hover);
+    }
+
+    .btn.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* ── Stat Cards ──────────────────────────────────────── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+
+    .stat-card .stat-label {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .stat-card .stat-value {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stat-card .stat-sub {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .stat-value.green {
+      color: var(--green);
+    }
+
+    .stat-value.blue {
+      color: var(--blue);
+    }
+
+    .stat-value.yellow {
+      color: var(--yellow);
+    }
+
+    .stat-value.accent {
+      color: var(--accent);
+    }
+
+    /* ── Section Headers ─────────────────────────────────── */
+    .section {
+      margin-bottom: 32px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .section-header h2 {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    /* ── Tables ──────────────────────────────────────────── */
+    .table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .table-scroll {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    thead th {
+      text-align: left;
+      padding: 12px 16px;
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    tbody td {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      font-variant-numeric: tabular-nums;
+    }
+
+    tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    tbody tr:hover {
+      background: var(--surface-hover);
+    }
+
+    .mono {
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    /* ── Badges ──────────────────────────────────────────── */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .badge-green {
+      background: var(--green-bg);
+      color: var(--green);
+    }
+
+    .badge-red {
+      background: var(--red-bg);
+      color: var(--red);
+    }
+
+    .badge-yellow {
+      background: var(--yellow-bg);
+      color: var(--yellow);
+    }
+
+    .badge-blue {
+      background: var(--blue-bg);
+      color: var(--blue);
+    }
+
+    .badge-muted {
+      background: rgba(139, 141, 152, 0.12);
+      color: var(--text-muted);
+    }
+
+    /* ── Status Indicator ────────────────────────────────── */
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 6px;
+    }
+
+    .status-dot.live {
+      background: var(--green);
+      box-shadow: 0 0 6px var(--green);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    .status-dot.off {
+      background: var(--text-muted);
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* ── Empty / Error States ────────────────────────────── */
+    .empty-state {
+      text-align: center;
+      padding: 48px 20px;
+      color: var(--text-muted);
+    }
+
+    .empty-state svg {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 16px;
+      opacity: 0.4;
+    }
+
+    .empty-state p {
+      font-size: 14px;
+    }
+
+    .error-banner {
+      background: var(--red-bg);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      color: var(--red);
+      font-size: 13px;
+      display: none;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .error-banner.visible {
+      display: flex;
+    }
+
+    /* ── Playground ─────────────────────────────────────── */
+    .playground-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 32px;
+    }
+
+    .playground-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+
+    @media (max-width: 900px) {
+      .playground-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .control-group {
+      margin-bottom: 14px;
+    }
+
+    .control-group label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 6px;
+    }
+
+    .select-input, .text-input, .textarea-input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .select-input:focus, .text-input:focus, .textarea-input:focus {
+      border-color: var(--accent);
+    }
+
+    .textarea-input {
+      font-family: var(--font);
+      resize: vertical;
+      min-height: 90px;
+    }
+
+    .presets-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .btn-pill {
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 12px;
+      background: var(--surface-hover);
+      border: 1px solid var(--border);
+      color: var(--text);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-pill:hover {
+      border-color: var(--accent);
+      color: var(--accent-hover);
+    }
+
+    .inspector-panel {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      height: 100%;
+    }
+
+    .inspector-header {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .inspector-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .metric-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+    }
+
+    .metric-box .metric-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+
+    .metric-box .metric-val {
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .response-box {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      font-family: var(--font);
+      font-size: 13px;
+      color: var(--text);
+      white-space: pre-wrap;
+      overflow-y: auto;
+      max-height: 240px;
+      line-height: 1.5;
+    }
+
+    /* ── Responsive ──────────────────────────────────────── */
+    @media (max-width: 768px) {
+      .app-header {
+        padding: 12px 16px;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .main {
+        padding: 16px;
+      }
+
+      .auth-bar {
+        flex-wrap: wrap;
+      }
+
+      .stats-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- ── Header ──────────────────────────────────────── -->
+  <header class="app-header">
+    <div class="logo">
+      <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect width="28" height="28" rx="6" fill="#6366f1" />
+        <path d="M8 9h5.5a3.5 3.5 0 010 7H8V9z" fill="#fff" opacity="0.9" />
+        <circle cx="18" cy="19" r="3" fill="#fff" opacity="0.6" />
+      </svg>
+      <h1>Prism <span>Ops Console</span></h1>
+    </div>
+    <div class="header-controls">
+      <span id="refresh-status" style="font-size:12px;color:var(--text-muted)"></span>
+      <button class="btn" id="btn-refresh" onclick="fetchAll()" title="Refresh data">
+        ↻ Refresh
+      </button>
+      <button class="btn" id="btn-auto" onclick="toggleAutoRefresh()" title="Toggle auto-refresh every 10s">
+        <span class="status-dot off" id="auto-dot"></span>
+        Auto
+      </button>
+    </div>
+  </header>
+
+  <!-- ── Main Content ────────────────────────────────── -->
+  <div class="main">
+    <!-- Auth Bar -->
+    <div class="auth-bar">
+      <label for="admin-token">Admin Token</label>
+      <input
+        type="password"
+        id="admin-token"
+        placeholder="Enter your PRISM_ADMIN_TOKEN…"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <button class="btn btn-primary" onclick="fetchAll()">Connect</button>
+    </div>
+
+    <!-- Error Banner -->
+    <div class="error-banner" id="error-banner">
+      <span>⚠</span>
+      <span id="error-message"></span>
+    </div>
+
+    <!-- Stat Cards -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Cache Hit Rate</div>
+        <div class="stat-value green" id="stat-hit-rate">—</div>
+        <div class="stat-sub" id="stat-hit-detail">No data</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Cache Entries</div>
+        <div class="stat-value blue" id="stat-cache-entries">—</div>
+        <div class="stat-sub">Stored responses</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Active Keys</div>
+        <div class="stat-value accent" id="stat-active-keys">—</div>
+        <div class="stat-sub" id="stat-keys-month">This month</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Spend</div>
+        <div class="stat-value yellow" id="stat-total-spend">—</div>
+        <div class="stat-sub" id="stat-spend-month">This month</div>
+      </div>
+    </div>
+
+    <!-- ── Interactive Playground (Questioning & Model Inspector) ── -->
+    <div class="section">
+      <div class="section-header">
+        <h2>Interactive Playground & Model Router Tester</h2>
+        <span style="font-size:12px;color:var(--text-muted)">Test live prompt classification, model selection & semantic cache</span>
+      </div>
+
+      <div class="playground-card">
+        <div class="playground-grid">
+          <!-- Left: Prompt Controls -->
+          <div class="playground-controls">
+            <div class="control-group">
+              <label for="play-key">Virtual API Key</label>
+              <select id="play-key" class="select-input">
+                <option value="prism-sk-search-1a2b3c">prism-sk-search-1a2b3c (Full Access: Auto, Fast, Smart + Cache)</option>
+                <option value="prism-sk-alias-demo">prism-sk-alias-demo (Aliases: Auto, Fast, Smart, Quality)</option>
+                <option value="prism-demo-rate-limit-10">prism-demo-rate-limit-10 (Rate Limit Test: 10 RPM)</option>
+              </select>
+            </div>
+
+            <div class="control-group">
+              <label for="play-model">Model / Routing Target</label>
+              <select id="play-model" class="select-input">
+                <option value="auto">auto — Smart Difficulty Router (AI Hot Path)</option>
+                <option value="fast">fast — Fast Tier (Primary: gpt-4o-mini)</option>
+                <option value="smart">smart — Smart Tier (Primary: llama-3.3-70b-versatile)</option>
+                <option value="gpt-4o-mini">gpt-4o-mini (Direct OpenAI)</option>
+                <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Direct Groq)</option>
+              </select>
+            </div>
+
+            <div class="control-group">
+              <label>Quick Test Presets</label>
+              <div class="presets-row">
+                <button type="button" class="btn-pill" onclick="setPreset('simple')">⚡ Simple &rarr; Auto picks Fast</button>
+                <button type="button" class="btn-pill" onclick="setPreset('complex')">🧠 Complex &rarr; Auto picks Smart</button>
+                <button type="button" class="btn-pill" onclick="setPreset('cache')">💾 Cache Hit Test (Paraphrase)</button>
+              </div>
+            </div>
+
+            <div class="control-group">
+              <label for="play-prompt">Question / Prompt</label>
+              <textarea
+                id="play-prompt"
+                class="textarea-input"
+                placeholder="Ask any question or prompt to test model selection (e.g. 'What is 2+2?' vs 'Write a distributed lock')..."
+              >What is the boiling point of water at standard atmospheric pressure in Celsius?</textarea>
+            </div>
+
+            <div style="display:flex;gap:10px;">
+              <button class="btn btn-primary" id="btn-send-play" onclick="sendPlaygroundQuestion()">
+                Ask Gateway
+              </button>
+              <button class="btn" onclick="clearPlayground()">
+                Clear
+              </button>
+            </div>
+          </div>
+
+          <!-- Right: Live Inspector & Response -->
+          <div class="inspector-panel">
+            <div class="inspector-header">
+              <span>Live Decision Inspector</span>
+              <span id="play-status-pill" class="badge badge-muted">Idle</span>
+            </div>
+
+            <div class="inspector-metrics">
+              <div class="metric-box">
+                <div class="metric-label">Model Selected</div>
+                <div class="metric-val" id="insp-model">—</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-label">Provider</div>
+                <div class="metric-val" id="insp-provider">—</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-label">Cache</div>
+                <div class="metric-val" id="insp-cache">—</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-label">Fallback</div>
+                <div class="metric-val" id="insp-fallback">—</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-label">Cost (USD)</div>
+                <div class="metric-val yellow" id="insp-cost">—</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-label">Latency</div>
+                <div class="metric-val blue" id="insp-latency">—</div>
+              </div>
+            </div>
+
+            <div class="control-group" style="margin-bottom:0;flex:1;display:flex;flex-direction:column;">
+              <label>Model Response</label>
+              <div id="insp-response" class="response-box">Click "Ask Gateway" to submit your question. The selected model and answer will appear here.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Usage Table -->
+    <div class="section">
+      <div class="section-header">
+        <h2>Usage by Key</h2>
+      </div>
+      <div class="table-wrap">
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Key Hash</th>
+                <th>Month</th>
+                <th>Spend (USD)</th>
+                <th>Tokens</th>
+                <th>Requests</th>
+                <th>Cache Hits</th>
+              </tr>
+            </thead>
+            <tbody id="usage-tbody">
+              <tr>
+                <td colspan="6">
+                  <div class="empty-state">
+                    <p>Enter your admin token and click Connect.</p>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recent Requests Table -->
+    <div class="section">
+      <div class="section-header">
+        <h2>Recent Requests</h2>
+      </div>
+      <div class="table-wrap">
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Request ID</th>
+                <th>Time</th>
+                <th>Status</th>
+                <th>Model</th>
+                <th>Provider</th>
+                <th>Tokens</th>
+                <th>Cost</th>
+                <th>Cache</th>
+                <th>Fallback</th>
+                <th>Latency</th>
+              </tr>
+            </thead>
+            <tbody id="logs-tbody">
+              <tr>
+                <td colspan="10">
+                  <div class="empty-state">
+                    <p>No request logs loaded yet.</p>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Scripts ─────────────────────────────────────── -->
+  <script>
+    // ── State ────────────────────────────────────────────
+    let autoRefreshTimer = null;
+    const AUTO_REFRESH_MS = 10_000;
+
+    // ── Helpers ──────────────────────────────────────────
+    function getToken() {
+      return document.getElementById("admin-token").value.trim();
+    }
+
+    function getBaseUrl() {
+      if (
+        !window.location.origin ||
+        window.location.origin === "null" ||
+        window.location.protocol === "file:"
+      ) {
+        return "http://localhost:8000";
+      }
+      return window.location.origin;
+    }
+
+    function showError(msg) {
+      const banner = document.getElementById("error-banner");
+      document.getElementById("error-message").textContent = msg;
+      banner.classList.add("visible");
+    }
+
+    function hideError() {
+      document.getElementById("error-banner").classList.remove("visible");
+    }
+
+    function formatUsd(val) {
+      if (val == null) return "—";
+      return "$" + Number(val).toFixed(6);
+    }
+
+    function formatNumber(val) {
+      if (val == null) return "—";
+      return Number(val).toLocaleString();
+    }
+
+    function formatPercent(val) {
+      if (val == null) return "—";
+      return (val * 100).toFixed(1) + "%";
+    }
+
+    function formatTimestamp(iso) {
+      if (!iso) return "—";
+      try {
+        const d = new Date(iso);
+        return d.toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        });
+      } catch {
+        return iso;
+      }
+    }
+
+    function truncateHash(hash) {
+      if (!hash) return "—";
+      if (hash.length <= 16) return hash;
+      return hash.slice(0, 8) + "…" + hash.slice(-8);
+    }
+
+    function statusBadge(code) {
+      if (code >= 200 && code < 300) {
+        return '<span class="badge badge-green">' + code + "</span>";
+      } else if (code >= 400 && code < 500) {
+        return '<span class="badge badge-yellow">' + code + "</span>";
+      } else if (code >= 500) {
+        return '<span class="badge badge-red">' + code + "</span>";
+      }
+      return '<span class="badge badge-muted">' + code + "</span>";
+    }
+
+    function cacheBadge(result) {
+      if (!result) return '<span class="badge badge-muted">—</span>';
+      if (result === "hit") {
+        return '<span class="badge badge-green">hit</span>';
+      } else if (result === "miss") {
+        return '<span class="badge badge-muted">miss</span>';
+      } else if (result === "skip") {
+        return '<span class="badge badge-yellow">skip</span>';
+      }
+      return '<span class="badge badge-muted">' + result + "</span>";
+    }
+
+    function fallbackBadge(used) {
+      if (used) {
+        return '<span class="badge badge-yellow">yes</span>';
+      }
+      return '<span class="badge badge-muted">no</span>';
+    }
+
+    // ── API Calls ────────────────────────────────────────
+    async function apiFetch(path) {
+      const token = getToken();
+      if (!token) {
+        throw new Error("Please enter your admin token.");
+      }
+      const resp = await fetch(getBaseUrl() + path, {
+        headers: {
+          Authorization: "Bearer " + token,
+        },
+      });
+      if (!resp.ok) {
+        const body = await resp.text();
+        let msg = "HTTP " + resp.status;
+        try {
+          const j = JSON.parse(body);
+          msg = j.detail || j.error?.message || msg;
+        } catch {}
+        throw new Error(msg);
+      }
+      return resp.json();
+    }
+
+    // ── Render Functions ─────────────────────────────────
+    function renderCacheStats(data) {
+      document.getElementById("stat-hit-rate").textContent = formatPercent(
+        data.cache_hit_rate
+      );
+      document.getElementById("stat-hit-detail").textContent =
+        formatNumber(data.total_hits) +
+        " hits / " +
+        formatNumber(data.total_hits + data.total_entries) +
+        " total";
+      document.getElementById("stat-cache-entries").textContent = formatNumber(
+        data.total_entries
+      );
+    }
+
+    function renderUsage(data) {
+      const tbody = document.getElementById("usage-tbody");
+      const usage = data.usage || [];
+
+      document.getElementById("stat-active-keys").textContent = data.total_keys;
+      document.getElementById("stat-keys-month").textContent = data.month;
+
+      let totalSpend = 0;
+      usage.forEach(function (u) {
+        totalSpend += u.total_spend_usd || 0;
+      });
+      document.getElementById("stat-total-spend").textContent =
+        formatUsd(totalSpend);
+      document.getElementById("stat-spend-month").textContent = data.month;
+
+      if (usage.length === 0) {
+        tbody.innerHTML =
+          '<tr><td colspan="6"><div class="empty-state"><p>No usage data for ' +
+          data.month +
+          ".</p></div></td></tr>";
+        return;
+      }
+
+      tbody.innerHTML = usage
+        .map(function (u) {
+          return (
+            "<tr>" +
+            '<td class="mono" title="' +
+            (u.key_hash || "") +
+            '">' +
+            truncateHash(u.key_hash) +
+            "</td>" +
+            "<td>" +
+            (u.month || "—") +
+            "</td>" +
+            "<td>" +
+            formatUsd(u.total_spend_usd) +
+            "</td>" +
+            "<td>" +
+            formatNumber(u.total_tokens) +
+            "</td>" +
+            "<td>" +
+            formatNumber(u.total_requests) +
+            "</td>" +
+            "<td>" +
+            formatNumber(u.cache_hits) +
+            "</td>" +
+            "</tr>"
+          );
+        })
+        .join("");
+    }
+
+    function renderLogs(data) {
+      const tbody = document.getElementById("logs-tbody");
+      const logs = data.logs || [];
+
+      if (logs.length === 0) {
+        tbody.innerHTML =
+          '<tr><td colspan="10"><div class="empty-state"><p>No request logs found.</p></div></td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = logs
+        .map(function (l) {
+          var totalTokens =
+            (l.prompt_tokens || 0) + (l.completion_tokens || 0);
+          var latency =
+            l.latency_ms != null ? l.latency_ms + " ms" : "—";
+          return (
+            "<tr>" +
+            '<td class="mono" title="' +
+            (l.request_id || "") +
+            '">' +
+            truncateHash(l.request_id) +
+            "</td>" +
+            "<td>" +
+            formatTimestamp(l.created_at) +
+            "</td>" +
+            "<td>" +
+            statusBadge(l.status_code) +
+            "</td>" +
+            "<td>" +
+            (l.model_resolved || l.model_requested || "—") +
+            "</td>" +
+            "<td>" +
+            (l.provider || "—") +
+            "</td>" +
+            "<td>" +
+            formatNumber(totalTokens) +
+            "</td>" +
+            "<td>" +
+            formatUsd(l.cost_usd) +
+            "</td>" +
+            "<td>" +
+            cacheBadge(l.cache_result) +
+            "</td>" +
+            "<td>" +
+            fallbackBadge(l.fallback_used) +
+            "</td>" +
+            "<td>" +
+            latency +
+            "</td>" +
+            "</tr>"
+          );
+        })
+        .join("");
+    }
+
+    // ── Playground Functions ─────────────────────────────
+    function setPreset(type) {
+      const modelSelect = document.getElementById("play-model");
+      const promptInput = document.getElementById("play-prompt");
+
+      if (type === "simple") {
+        modelSelect.value = "auto";
+        promptInput.value = "What is the boiling point of water at standard atmospheric pressure in Celsius?";
+      } else if (type === "complex") {
+        modelSelect.value = "auto";
+        promptInput.value = "Write a Python implementation of an asynchronous token-bucket rate limiter with threading locks, explain its algorithmic complexity, and provide step-by-step mathematical reasoning.";
+      } else if (type === "cache") {
+        modelSelect.value = "auto";
+        promptInput.value = "Can you tell me the boiling temperature of water in degrees Celsius?";
+      }
+    }
+
+    function clearPlayground() {
+      document.getElementById("play-prompt").value = "";
+      document.getElementById("insp-model").innerHTML = "—";
+      document.getElementById("insp-provider").innerHTML = "—";
+      document.getElementById("insp-cache").innerHTML = "—";
+      document.getElementById("insp-fallback").innerHTML = "—";
+      document.getElementById("insp-cost").textContent = "—";
+      document.getElementById("insp-latency").textContent = "—";
+      document.getElementById("insp-response").textContent = 'Click "Ask Gateway" to submit your question. The selected model and answer will appear here.';
+      document.getElementById("play-status-pill").className = "badge badge-muted";
+      document.getElementById("play-status-pill").textContent = "Idle";
+    }
+
+    async function sendPlaygroundQuestion() {
+      const key = document.getElementById("play-key").value.trim();
+      const model = document.getElementById("play-model").value;
+      const prompt = document.getElementById("play-prompt").value.trim();
+      const btn = document.getElementById("btn-send-play");
+      const pill = document.getElementById("play-status-pill");
+      const respBox = document.getElementById("insp-response");
+
+      if (!prompt) {
+        alert("Please enter a prompt or question.");
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = "Routing…";
+      pill.className = "badge badge-yellow";
+      pill.textContent = "Routing…";
+      respBox.textContent = "Submitting prompt to Prism LLM Gateway...";
+
+      const startTime = performance.now();
+
+      try {
+        const res = await fetch(getBaseUrl() + "/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": key,
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+
+        const elapsedMs = Math.round(performance.now() - startTime);
+        const providerHeader = res.headers.get("x-prism-provider") || "—";
+        const cacheHeader = res.headers.get("x-prism-cache") || "MISS";
+        const fallbackHeader = res.headers.get("x-prism-fallback") || "false";
+        const costHeader = res.headers.get("x-prism-cost-usd");
+
+        if (!res.ok) {
+          const errText = await res.text();
+          let errMsg = "HTTP " + res.status;
+          try {
+            const j = JSON.parse(errText);
+            errMsg = j.error?.message || j.detail || errMsg;
+          } catch {}
+          pill.className = "badge badge-red";
+          pill.textContent = "Error " + res.status;
+          respBox.textContent = "Error: " + errMsg;
+          return;
+        }
+
+        const data = await res.json();
+        const resolvedModel = data.model || model;
+        const content = data.choices && data.choices[0] && data.choices[0].message
+          ? data.choices[0].message.content
+          : JSON.stringify(data, null, 2);
+
+        pill.className = "badge badge-green";
+        pill.textContent = "Success (200)";
+
+        let displayModel = resolvedModel;
+        let tierLabel = "";
+        if (resolvedModel.toLowerCase().includes("gpt-4o-mini")) {
+          displayModel = "gpt-4o-mini";
+          tierLabel = " ⚡ (Fast Tier)";
+        } else if (resolvedModel.toLowerCase().includes("llama") || resolvedModel.toLowerCase().includes("70b")) {
+          displayModel = "llama-3.3-70b";
+          tierLabel = " 🧠 (Smart Tier)";
+        }
+
+        let displayProvider = providerHeader.split("/")[0] || providerHeader;
+        if (displayProvider.toLowerCase() === "openai") {
+          displayProvider = "OpenAI";
+        } else if (displayProvider.toLowerCase() === "groq") {
+          displayProvider = "Groq";
+        }
+
+        document.getElementById("insp-model").innerHTML = '<span class="badge badge-accent">' + displayModel + tierLabel + '</span>';
+        document.getElementById("insp-provider").innerHTML = '<span class="badge badge-blue">' + displayProvider + '</span>';
+
+        if (cacheHeader.toUpperCase() === "HIT") {
+          document.getElementById("insp-cache").innerHTML = '<span class="badge badge-green">HIT</span>';
+        } else {
+          document.getElementById("insp-cache").innerHTML = '<span class="badge badge-muted">MISS</span>';
+        }
+
+        if (fallbackHeader === "true" || fallbackHeader === true) {
+          document.getElementById("insp-fallback").innerHTML = '<span class="badge badge-yellow">Yes</span>';
+        } else {
+          document.getElementById("insp-fallback").innerHTML = '<span class="badge badge-muted">No</span>';
+        }
+
+        document.getElementById("insp-cost").textContent = costHeader ? "$" + Number(costHeader).toFixed(6) : "—";
+        document.getElementById("insp-latency").textContent = elapsedMs + " ms";
+        respBox.textContent = content;
+
+        if (getToken()) {
+          fetchAll();
+        }
+      } catch (err) {
+        pill.className = "badge badge-red";
+        pill.textContent = "Failed";
+        respBox.textContent = "Network Error: " + (err.message || err);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Ask Gateway";
+      }
+    }
+
+    // ── Main Fetch ───────────────────────────────────────
+    async function fetchAll() {
+      hideError();
+      var btn = document.getElementById("btn-refresh");
+      btn.disabled = true;
+      btn.textContent = "⟳ Loading…";
+
+      try {
+        var results = await Promise.all([
+          apiFetch("/admin/cache/stats"),
+          apiFetch("/admin/usage"),
+          apiFetch("/admin/logs?limit=20"),
+        ]);
+
+        renderCacheStats(results[0]);
+        renderUsage(results[1]);
+        renderLogs(results[2]);
+
+        document.getElementById("refresh-status").textContent =
+          "Updated " + new Date().toLocaleTimeString();
+      } catch (err) {
+        showError(err.message || "Failed to fetch data.");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "↻ Refresh";
+      }
+    }
+
+    // ── Auto-Refresh ─────────────────────────────────────
+    function toggleAutoRefresh() {
+      var dot = document.getElementById("auto-dot");
+      var btnAuto = document.getElementById("btn-auto");
+
+      if (autoRefreshTimer) {
+        clearInterval(autoRefreshTimer);
+        autoRefreshTimer = null;
+        dot.className = "status-dot off";
+        btnAuto.classList.remove("active");
+      } else {
+        fetchAll();
+        autoRefreshTimer = setInterval(fetchAll, AUTO_REFRESH_MS);
+        dot.className = "status-dot live";
+        btnAuto.classList.add("active");
+      }
+    }
+
+    // ── Allow Enter key in token field ───────────────────
+    document
+      .getElementById("admin-token")
+      .addEventListener("keydown", function (e) {
+        if (e.key === "Enter") {
+          fetchAll();
+        }
+      });
+  </script>
+</body>
+</html>
+

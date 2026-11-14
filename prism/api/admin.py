@@ -16,7 +16,12 @@ router = APIRouter(
 async def verify_admin_token(request: Request) -> None:
     """Validate the separate Prism admin bearer token."""
 
-    configured_token = os.getenv("PRISM_ADMIN_TOKEN")
+    # Prefer token stored in app.state (set at startup from Settings).
+    # Fall back to os.getenv for contexts where app.state is unavailable
+    # (e.g. lightweight test fixtures that don't boot the full app).
+    configured_token = getattr(
+        request.app.state, "admin_token", None
+    ) or os.getenv("PRISM_ADMIN_TOKEN")
     authorization = request.headers.get("Authorization", "")
 
     if not configured_token:
@@ -111,14 +116,27 @@ async def get_admin_cache_stats(request: Request):
 
     stats = request.app.state.cache_repository.get_stats()
 
+    # Compute accurate hit rate from usage records (cache_hits / total_requests).
+    # The cache entry table only tracks stored prompts, not total lookups, so
+    # using total_entries in the denominator would yield a misleading metric.
+    selected_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    usage_records = request.app.state.usage_repository.get_all_usage(
+        selected_month
+    )
+    total_requests = sum(r.total_requests for r in usage_records)
+    total_cache_hits = sum(r.cache_hits for r in usage_records)
+
+    cache_hit_rate = (
+        total_cache_hits / total_requests
+        if total_requests > 0
+        else 0.0
+    )
+
     return {
         **stats.model_dump(mode="json"),
-        "cache_hit_rate": (
-            stats.total_hits
-            / (stats.total_hits + stats.total_entries)
-            if stats.total_hits + stats.total_entries > 0
-            else 0.0
-        ),
+        "cache_hit_rate": round(cache_hit_rate, 4),
+        "cache_hits_this_month": total_cache_hits,
+        "total_requests_this_month": total_requests,
     }
 
 

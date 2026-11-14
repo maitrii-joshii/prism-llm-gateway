@@ -1,0 +1,158 @@
+openapi: 3.1.0
+info:
+  title: Prism LLM Gateway
+  description: Production-grade AI gateway with multi-provider routing, fallback, semantic caching, token metering, and observability.
+  version: 1.0.0
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health Check
+      description: Return application health status.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /v1/models:
+    get:
+      tags:
+        - Models
+      summary: List Models
+      description: Return the list of available models and aliases.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+  /metrics:
+    get:
+      tags:
+        - Observability
+      summary: Get Prometheus Metrics
+      description: Export Prometheus-compatible metrics for monitoring.
+      responses:
+        '200':
+          description: Prometheus text formatted metrics
+          content:
+            text/plain: {}
+  /v1/chat/completions:
+    post:
+      tags:
+        - Chat
+      summary: Create Chat Completion
+      description: OpenAI-compatible chat completion endpoint with routing, caching, and fallback.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+            description: Tenant virtual API key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - model
+                - messages
+              properties:
+                model:
+                  type: string
+                  example: fast
+                messages:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - role
+                      - content
+                    properties:
+                      role:
+                        type: string
+                      content:
+                        type: string
+                stream:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: OpenAI chat completion response or SSE stream
+          headers:
+            x-prism-request-id:
+              schema:
+                type: string
+            x-prism-provider:
+              schema:
+                type: string
+            x-prism-cache:
+              schema:
+                type: string
+            x-prism-fallback:
+              schema:
+                type: string
+            x-prism-cost-usd:
+              schema:
+                type: string
+        '401':
+          description: Authentication failure
+        '403':
+          description: Model not allowed
+        '429':
+          description: Rate limit or budget exceeded
+        '502':
+          description: Upstream provider error
+  /admin/usage:
+    get:
+      tags:
+        - Admin
+      summary: Get Tenant Usage
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Usage summary
+  /admin/logs:
+    get:
+      tags:
+        - Admin
+      summary: Get Request Logs
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Request logs list
+  /admin/cache/stats:
+    get:
+      tags:
+        - Admin
+      summary: Get Cache Stats
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Cache stats
+

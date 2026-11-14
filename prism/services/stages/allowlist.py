@@ -4,6 +4,13 @@ from prism.domain.errors import AuthenticationError, ModelNotAllowedError
 from prism.domain.models import RequestContext
 
 
+ALIAS_TO_MODELS = {
+    "fast": {"gpt-4o-mini"},
+    "smart": {"llama-3.3-70b-versatile"},
+    "quality": {"llama-3.3-70b-versatile"},
+}
+
+
 async def enforce_model_allowlist(
     context: RequestContext,
 ) -> RequestContext:
@@ -22,6 +29,12 @@ async def enforce_model_allowlist(
         return context
 
     requested_model = context.model_requested.strip()
+
+    # Expand any allowed aliases to their underlying model names.
+    effective_allowed = set(allowed_models)
+    for alias, models in ALIAS_TO_MODELS.items():
+        if alias in effective_allowed:
+            effective_allowed.update(models)
 
     # Explicitly require permission to use automatic routing.
     if requested_model == "auto" and requested_model not in allowed_models:
@@ -57,7 +70,15 @@ async def enforce_model_allowlist(
                 "for this API key."
             )
 
-    # Validate every resolved primary and fallback model.
+    # If the requested alias or model is explicitly in the tenant's allowlist
+    # (for non-auto requests), the request is authorized.
+    if requested_model != "auto" and requested_model in allowed_models:
+        context.decision_trace.append(
+            f"model allowlist ok ({requested_model})"
+        )
+        return context
+
+    # Validate every resolved primary and fallback model against the effective allowlist.
     requested_models = (
         context.model_candidates
         if context.model_candidates
@@ -65,7 +86,7 @@ async def enforce_model_allowlist(
     )
 
     for model in requested_models:
-        if model not in allowed_models:
+        if model not in effective_allowed:
             context.decision_trace.append("model not allowed")
             raise ModelNotAllowedError(
                 f"Model '{model}' is not allowed for this API key."

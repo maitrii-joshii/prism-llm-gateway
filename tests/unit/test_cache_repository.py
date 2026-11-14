@@ -233,3 +233,18 @@ def test_empty_key_hash_is_rejected(cache_repository):
             [1.0, 0.5],
             {"content": "Response"},
         )
+
+def test_cache_eviction_bounds_total_entries(cache_repository, monkeypatch):
+    """When entries exceed MAX_CACHE_ENTRIES, the oldest are evicted."""
+    monkeypatch.setattr(cache_repository, "MAX_CACHE_ENTRIES", 3)
+
+    for i in range(5):
+        cache_repository.store(
+            key_hash="team-a-key",
+            alias=f"alias-{i}",
+            embedding=[float(i), 1.0],
+            response_body={"content": f"response {i}"},
+        )
+
+    stats = cache_repository.get_stats()
+    assert stats.total_entries == 3, f"Expected 3 entries due to eviction, got {stats.total_entries}"

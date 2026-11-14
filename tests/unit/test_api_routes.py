@@ -13,6 +13,7 @@ from prism.adapters.sqlite_repos import (
     init_database,
 )
 from prism.adapters.system_clock import SystemClock
+from prism.config.loader import LoadedConfig
 from prism.api.error_handler import prism_error_handler
 from prism.api.middleware import request_id_middleware
 from prism.api.routes import router
@@ -78,15 +79,17 @@ def create_test_app(
 
     app.state.key_repository = key_repository
 
-    # Configure pricing for the model returned by the fake provider.
-    app.state.loaded_config = GatewayConfig(
+    # Configure pricing using the same LoadedConfig structure as production.
+    app.state.loaded_config = LoadedConfig(
+        seed_keys=[],
         model_pricing={
             "fake-model": ModelPricing(
                 model_name="fake-model",
                 input_price_per_million=0.0,
                 output_price_per_million=0.0,
             )
-        }
+        },
+        gateway_config=GatewayConfig(),
     )
 
     app.state.provider_adapter = adapter
@@ -486,3 +489,92 @@ def test_other_prism_error_uses_its_configured_status():
     assert response.json()["error"]["type"] == "authentication_error"
     assert response.json()["error"]["code"] == 401
     assert "x-prism-request-id" in response.headers
+
+
+# -------------------------------------------------------------------
+# Retry-After header tests
+# -------------------------------------------------------------------
+
+
+def test_rate_limit_error_includes_retry_after_header():
+    """429 rate-limit responses must carry a Retry-After header."""
+
+    from prism.domain.errors import RateLimitError
+
+    adapter = FakeProviderAdapter(error=RateLimitError("Rate limit exceeded"))
+    app = create_test_app(adapter)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json=valid_payload(),
+            headers={"x-api-key": TEST_API_KEY},
+        )
+
+    assert response.status_code == 429
+    assert "retry-after" in response.headers, (
+        "Retry-After header must be present on rate-limit 429 responses"
+    )
+    assert response.headers["retry-after"] == "60"
+    assert response.json()["error"]["type"] == "rate_limit_exceeded"
+
+
+def test_budget_exceeded_error_includes_retry_after_header():
+    """429 budget-exceeded responses must carry a Retry-After header."""
+
+    from prism.domain.errors import BudgetExceededError
+
+    adapter = FakeProviderAdapter(error=BudgetExceededError("Budget exceeded"))
+    app = create_test_app(adapter)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json=valid_payload(),
+            headers={"x-api-key": TEST_API_KEY},
+        )
+
+    assert response.status_code == 429
+    assert "retry-after" in response.headers, (
+        "Retry-After header must be present on budget-exceeded 429 responses"
+    )
+    assert response.headers["retry-after"] == "60"
+    assert response.json()["error"]["type"] == "budget_exceeded"
+
+
+def test_non_429_error_does_not_include_retry_after_header():
+    """Non-429 error responses must not include Retry-After."""
+
+    adapter = FakeProviderAdapter(error=AuthenticationError("Bad key"))
+    app = create_test_app(adapter)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json=valid_payload(),
+            headers={"x-api-key": TEST_API_KEY},
+        )
+
+    assert response.status_code == 401
+    assert "retry-after" not in response.headers, (
+        "Retry-After must not appear on non-429 error responses"
+    )
+
+
+# -------------------------------------------------------------------
+# /v1/models endpoint tests
+# -------------------------------------------------------------------
+
+
+def test_list_models_returns_openai_compatible_response(client):
+    """GET /v1/models returns an object: list with available models."""
+
+    response = client.get("/v1/models")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["object"] == "list"
+    assert isinstance(data["data"], list)
+    model_ids = [m["id"] for m in data["data"]]
+    # The test app configures 'fake-model'
+    assert "fake-model" in model_ids

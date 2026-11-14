@@ -11,7 +11,12 @@ import uuid
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from prism.domain.errors import PrismError, UpstreamError
+from prism.domain.errors import (
+    BudgetExceededError,
+    PrismError,
+    RateLimitError,
+    UpstreamError,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -40,7 +45,13 @@ async def prism_error_handler(
     request: Request,
     exc: PrismError,
 ) -> JSONResponse:
-    """Convert domain errors into safe OpenAI-compatible JSON responses."""
+    """Convert domain errors into safe OpenAI-compatible JSON responses.
+
+    For rate-limit (429) and budget-exceeded (429) errors a ``Retry-After``
+    header is included so OpenAI-compatible client SDKs know how long to wait
+    before retrying.  The value of 60 seconds is a conservative safe default;
+    the real reset window depends on the tenant's RPM configuration.
+    """
 
     status_code = getattr(exc, "status_code", 500)
     error_type = getattr(exc, "error_type", "internal_error")
@@ -52,11 +63,17 @@ async def prism_error_handler(
     else:
         message = str(exc)
 
+    response_headers: dict[str, str] = {
+        "x-prism-request-id": request_id,
+    }
+
+    # Add Retry-After on throttle responses so clients back off correctly.
+    if isinstance(exc, (RateLimitError, BudgetExceededError)):
+        response_headers["Retry-After"] = "60"
+
     return JSONResponse(
         status_code=status_code,
-        headers={
-            "x-prism-request-id": request_id,
-        },
+        headers=response_headers,
         content={
             "error": {
                 "message": message,

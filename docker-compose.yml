@@ -1,14 +1,17 @@
+# Prism + the unmodified Airtribe starter mock providers (stdlib only).
+#
+# The gateway loads the starter data files in ./data unchanged
+# (seed_keys.json, model_pricing.json, gateway_config.sample.json).
+# Provider base URLs are overridden below so they resolve inside the
+# compose network instead of localhost.
 services:
   alpha-mock:
     image: python:3.12-slim
     container_name: prism-alpha-mock
     working_dir: /app
     volumes:
-      - ./scripts:/app/scripts:ro
-    command:
-      - sh
-      - -c
-      - pip install --no-cache-dir fastapi uvicorn && python scripts/mock_provider.py --port 9001 --name alpha
+      - ./scripts/mock_provider.py:/app/mock_provider.py:ro
+    command: ["python", "mock_provider.py", "--port", "9001", "--name", "alpha"]
     ports:
       - "9001:9001"
     networks:
@@ -22,18 +25,15 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 5s
 
   beta-mock:
     image: python:3.12-slim
     container_name: prism-beta-mock
     working_dir: /app
     volumes:
-      - ./scripts:/app/scripts:ro
-    command:
-      - sh
-      - -c
-      - pip install --no-cache-dir fastapi uvicorn && python scripts/mock_provider.py --port 9002 --name beta
+      - ./scripts/mock_provider.py:/app/mock_provider.py:ro
+    command: ["python", "mock_provider.py", "--port", "9002", "--name", "beta"]
     ports:
       - "9002:9002"
     networks:
@@ -47,7 +47,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 5s
 
   prism-gateway:
     build:
@@ -58,20 +58,15 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - prism-data:/app/data
-      - ./config:/app/config:ro
-    env_file:
-      - .env
+      - prism-db:/app/dbdata
     environment:
       PORT: "3000"
-      PRISM_PORT: "3000"
-      PRISM_CONFIG_DIR: /app/config
-      PRISM_DB_PATH: /app/data/prism.db
+      PRISM_CONFIG_DIR: /app/data
+      PRISM_DB_PATH: /app/dbdata/prism.db
       PRISM_LOG_LEVEL: INFO
-      OPENAI_API_KEY: mock-alpha-key
-      OPENAI_BASE_URL: http://alpha-mock:9001/v1
-      GROQ_API_KEY: mock-beta-key
-      GROQ_BASE_URL: http://beta-mock:9002/v1
+      PRISM_ADMIN_TOKEN: ${PRISM_ADMIN_TOKEN:-admin-secret-change-me}
+      PRISM_PROVIDER_ALPHA_BASE_URL: http://alpha-mock:9001/v1
+      PRISM_PROVIDER_BETA_BASE_URL: http://beta-mock:9002/v1
     depends_on:
       alpha-mock:
         condition: service_healthy
@@ -82,7 +77,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  prism-data:
+  prism-db:
     driver: local
 
 networks:

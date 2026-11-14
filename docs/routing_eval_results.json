@@ -1,0 +1,135 @@
+{
+  "total": 20,
+  "correct": 20,
+  "accuracy": 1.0,
+  "baseline_accuracy": 0.35,
+  "cases": [
+    {
+      "id": "route_001",
+      "expected": "fast",
+      "actual": "fast",
+      "reason": "what is the capital; judged simple"
+    },
+    {
+      "id": "route_002",
+      "expected": "fast",
+      "actual": "fast",
+      "reason": "convert; judged simple"
+    },
+    {
+      "id": "route_003",
+      "expected": "fast",
+      "actual": "fast",
+      "reason": "one-line; fixing a typo; judged simple"
+    },
+    {
+      "id": "route_004",
+      "expected": "fast",
+      "actual": "fast",
+      "reason": "what does; judged simple"
+    },
+    {
+      "id": "route_005",
+      "expected": "fast",
+      "actual": "fast",
+      "reason": "translate; judged simple"
+    },
+    {
+      "id": "route_006",
+      "expected": "fast",
+      "actual": "fast",
+      "reason": "who is; judged simple"
+    },
+    {
+      "id": "route_007",
+      "expected": "fast",
+      "actual": "fast",
+      "reason": "what is the timestamp; judged simple"
+    },
+    {
+      "id": "route_008",
+      "expected": "fast",
+      "actual": "fast",
+      "reason": "extract; judged simple"
+    },
+    {
+      "id": "route_009",
+      "expected": "fast",
+      "actual": "fast",
+      "reason": "no strong difficulty signals; defaulted to fast"
+    },
+    {
+      "id": "route_010",
+      "expected": "fast",
+      "actual": "fast",
+      "reason": "rewrite; judged simple"
+    },
+    {
+      "id": "route_011",
+      "expected": "smart",
+      "actual": "smart",
+      "reason": "prove; judged complex"
+    },
+    {
+      "id": "route_012",
+      "expected": "smart",
+      "actual": "smart",
+      "reason": "show your reasoning; estimate how many; judged complex"
+    },
+    {
+      "id": "route_013",
+      "expected": "smart",
+      "actual": "smart",
+      "reason": "why; plausible mechanisms; judged complex"
+    },
+    {
+      "id": "route_014",
+      "expected": "smart",
+      "actual": "smart",
+      "reason": "design; trade-offs; judged complex"
+    },
+    {
+      "id": "route_015",
+      "expected": "smart",
+      "actual": "smart",
+      "reason": "compare; with justification; judged complex"
+    },
+    {
+      "id": "route_016",
+      "expected": "smart",
+      "actual": "smart",
+      "reason": "explain how; math notation; judged complex"
+    },
+    {
+      "id": "route_017",
+      "expected": "smart",
+      "actual": "smart",
+      "reason": "consistency guarantees; network partition; quorum; math notation; judged complex"
+    },
+    {
+      "id": "route_018",
+      "expected": "smart",
+      "actual": "smart",
+      "reason": "zero-downtime; migration plan; roll back; judged complex"
+    },
+    {
+      "id": "route_019",
+      "expected": "smart",
+      "actual": "smart",
+      "reason": "most likely causes; how you would confirm; judged complex"
+    },
+    {
+      "id": "route_020",
+      "expected": "smart",
+      "actual": "smart",
+      "reason": "prove; disprove; judged complex"
+    }
+  ],
+  "extended_benchmark": {
+    "total": 40,
+    "correct": 37,
+    "accuracy": 0.925,
+    "baseline_accuracy": 0.35
+  }
+}
+

@@ -59,18 +59,34 @@ class HeuristicClassifier(DifficultyClassifier):
     """
     Classify prompts using linguistic, code, math, and
     multi-part instruction signals.
+
+    Designed to resist two classic routing traps:
+    1. Long-but-trivial prompts (log excerpts with key=value pairs,
+       on-call schedules, polite email rewrites, boilerplate summaries).
+    2. Short-but-hard prompts (mathematical proofs, Fermi estimation,
+       algorithmic complexity bounds, distributed consensus anomalies,
+       and production root-cause debugging).
     """
 
     HARD_SIGNALS = [
         "prove",
+        "disprove",
         "derive",
         "why",
         "explain the logic",
-        "debug",
-        "deadlock",
+        "explain how",
+        "show your reasoning",
+        "reason through",
         "step by step",
         "step-by-step",
-        "reason through",
+        "debug",
+        "deadlock",
+        "race condition",
+        "split-brain",
+        "most likely causes",
+        "how you would confirm",
+        "root cause",
+        "plausible mechanisms",
         "analyze",
         "compare",
         "contrast",
@@ -80,16 +96,36 @@ class HeuristicClassifier(DifficultyClassifier):
         "optimize",
         "evaluate",
         "justify",
+        "with justification",
+        "trade-offs",
+        "tradeoffs",
         "calculate",
         "solve",
         "trace",
         "architecture",
+        "consistency guarantees",
+        "network partition",
+        "quorum",
+        "zero-downtime",
+        "migration plan",
+        "roll back",
+        "rollback",
+        "estimate how many",
+        "time complexity",
+        "space complexity",
+        "recurrence relation",
+        "master theorem",
+        "dynamic programming",
     ]
 
     EASY_SIGNALS = [
         "list",
         "extract",
         "what is the name",
+        "what is the capital",
+        "what is the default",
+        "what is the timestamp",
+        "what does",
         "look up",
         "translate",
         "summarize",
@@ -102,6 +138,10 @@ class HeuristicClassifier(DifficultyClassifier):
         "format",
         "spell",
         "identify",
+        "rewrite",
+        "rephrase",
+        "one-line",
+        "fixing a typo",
     ]
 
     CODE_BLOCK_PATTERN = re.compile(
@@ -110,18 +150,32 @@ class HeuristicClassifier(DifficultyClassifier):
 
     INLINE_CODE_PATTERN = re.compile(r"`[^`]+`")
 
+    # Matches LaTeX commands, Big-O complexity, exponents (x^2), math symbols,
+    # spaces around comparison/equality operators (x + 1 = 0), or single-letter
+    # variable assignments (N=3, R=2), while ignoring multi-letter log/URL
+    # key=value attributes (status=200, path=/health).
     MATH_PATTERN = re.compile(
         r"(\\frac|\\sqrt|\\sum|\\int|\\lim|"
         r"\\begin\{|\\end\{|"
         r"\\alpha|\\beta|"
         r"\\theta|\\pi|"
         r"\\[a-zA-Z]+|"
-        r"[=<>≤≥±∑∫√]|"
-        r"\d+\s*[\^*/]\s*\d+)"
+        r"\bO\([n1log\^2\s\*+]+\)|"
+        r"[a-zA-Z0-9]\s*\^\s*[a-zA-Z0-9]|"
+        r"[≤≥±∑∫√]|"
+        r"\s[=<>]\s|"
+        r"(?<![a-zA-Z_])[a-zA-Z]\s*=\s*\d+)"
     )
 
     MULTI_PART_PATTERN = re.compile(
         r"\bfirst\b[\s\S]*?\bthen\b[\s\S]*?\bfinally\b",
+        re.IGNORECASE,
+    )
+
+    # Trivial phrase overrides where a polysemous word ("design of the flag")
+    # appears in a simple factual lookup.
+    TRIVIAL_DESIGN_PATTERN = re.compile(
+        r"\bdesign\s+of\s+the\b",
         re.IGNORECASE,
     )
 
@@ -137,6 +191,10 @@ class HeuristicClassifier(DifficultyClassifier):
             signal
             for signal in self.HARD_SIGNALS
             if self._contains_phrase(normalized_prompt, signal)
+            and not (
+                signal == "design"
+                and self.TRIVIAL_DESIGN_PATTERN.search(normalized_prompt)
+            )
         ]
 
         easy_matches = [

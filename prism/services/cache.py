@@ -3,8 +3,8 @@
 import json
 from typing import Any
 
-from prism.adapters.bow_embedder import BowEmbedder
-from prism.adapters.sqlite_repos import CacheRepository
+from prism.ports.embedder import Embedder
+from prism.ports.repositories import CacheRepository
 from prism.domain.cache_decision import (
     TIME_SENSITIVE_KEYWORDS,
     is_cacheable,
@@ -17,7 +17,7 @@ class CacheService:
 
     def __init__(
         self,
-        embedder: BowEmbedder,
+        embedder: Embedder,
         repository: CacheRepository,
     ) -> None:
         self.embedder = embedder

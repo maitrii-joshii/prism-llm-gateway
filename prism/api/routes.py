@@ -5,10 +5,11 @@ import json
 import time
 from collections.abc import AsyncIterator
 from typing import Any
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from prism.config.logging import get_logger
 from prism.domain.cost import CostCalculator
@@ -21,6 +22,7 @@ from prism.domain.models import LogEntry, ProviderResponse, RequestContext
 from prism.domain.security import hash_api_key
 from prism.ports.provider import ProviderAdapter
 from prism.services.executor import ResilientExecutor
+from prism.services.metrics import metrics_registry
 from prism.services.pipeline import Pipeline
 from prism.services.streaming import stream_response
 from prism.services.stages.auth import authenticate_request
@@ -36,6 +38,75 @@ from prism.services.stages.resolve import (
 from prism.services.stages.validate import validate_request
 
 router = APIRouter()
+
+_CONSOLE_HTML = (
+    Path(__file__).resolve().parent.parent.parent / "console" / "index.html"
+)
+
+
+@router.get("/", include_in_schema=False)
+@router.get("/console", include_in_schema=False)
+@router.get("/console/", include_in_schema=False)
+async def route_ops_console():
+    """Serve the ops console HTML directly from the router."""
+    if _CONSOLE_HTML.is_file():
+        return HTMLResponse(content=_CONSOLE_HTML.read_text(encoding="utf-8"))
+    return HTMLResponse(
+        content="<h1>console/index.html not found on disk</h1>",
+        status_code=404,
+    )
+
+
+@router.get("/v1/models", tags=["Models"])
+async def list_models(request: Request) -> JSONResponse:
+    """Return the list of available models and aliases.
+
+    OpenAI-compatible client SDKs (e.g. ``openai`` Python/TS library)
+    often probe this endpoint to verify connectivity and discover
+    available model names.
+    """
+
+    loaded_config = getattr(request.app.state, "loaded_config", None)
+    models: list[dict[str, Any]] = []
+
+    if loaded_config:
+        # Include all configured aliases (fast, smart, auto).
+        for alias_name in loaded_config.gateway_config.aliases:
+            models.append({
+                "id": alias_name,
+                "object": "model",
+                "owned_by": "prism",
+                "permission": [],
+            })
+
+        # Include all underlying model names from the pricing table.
+        for model_name in loaded_config.model_pricing:
+            models.append({
+                "id": model_name,
+                "object": "model",
+                "owned_by": "provider",
+                "permission": [],
+            })
+    else:
+        # Minimal default fallback.
+        models = [
+            {"id": "fast", "object": "model", "owned_by": "prism"},
+            {"id": "smart", "object": "model", "owned_by": "prism"},
+            {"id": "auto", "object": "model", "owned_by": "prism"},
+        ]
+
+    return JSONResponse(content={"object": "list", "data": models})
+
+
+@router.get("/metrics", tags=["Observability"])
+async def get_prometheus_metrics() -> Response:
+    """Export Prometheus-compatible metrics for monitoring."""
+    metrics_text = metrics_registry.format_prometheus()
+    return Response(
+        content=metrics_text,
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
 logger = get_logger(__name__)
 
 
@@ -129,6 +200,52 @@ def save_request_log(
         )
 
         log_repository.save_log(log_entry)
+
+        # Record Prometheus metrics
+        model_lbl = context.model_resolved or context.model_requested or "unknown"
+        provider_lbl = context.provider_name or "none"
+        cache_lbl = context.cache_status or "none"
+        fallback_lbl = str(context.fallback_used).lower()
+
+        metrics_registry.increment_counter(
+            "prism_requests_total",
+            1.0,
+            {
+                "model": model_lbl,
+                "provider": provider_lbl,
+                "status_code": str(status_code),
+                "cache": cache_lbl,
+                "fallback": fallback_lbl,
+            },
+        )
+        metrics_registry.observe_duration(
+            "prism_request_duration_seconds",
+            latency_ms / 1000.0,
+        )
+        if log_entry.prompt_tokens:
+            metrics_registry.increment_counter(
+                "prism_tokens_total",
+                float(log_entry.prompt_tokens),
+                {"type": "prompt"},
+            )
+        if log_entry.completion_tokens:
+            metrics_registry.increment_counter(
+                "prism_tokens_total",
+                float(log_entry.completion_tokens),
+                {"type": "completion"},
+            )
+        if context.cost_usd > 0:
+            metrics_registry.increment_counter(
+                "prism_cost_usd_total",
+                float(context.cost_usd),
+                {"tenant": context.key_config.tenant_id if context.key_config else "unknown"},
+            )
+        if context.fallback_used:
+            metrics_registry.increment_counter(
+                "prism_fallback_events_total",
+                1.0,
+                {"model": model_lbl, "provider": provider_lbl},
+            )
 
         logger.info(
             "Request log saved",
@@ -769,10 +886,15 @@ async def chat_completions(
             executor = ResilientExecutor(
                 providers=providers,
                 max_retries=gateway_config.max_retries,
-                base_delay=getattr(
-                    settings,
-                    "retry_base_delay_seconds",
-                    1.0,
+                base_delay=(
+                    getattr(gateway_config, "retry_base_delay_seconds", None)
+                    if getattr(gateway_config, "retry_base_delay_seconds", None)
+                    is not None
+                    else getattr(
+                        settings,
+                        "retry_base_delay_seconds",
+                        1.0,
+                    )
                 ),
                 connect_timeout=getattr(
                     settings,
@@ -813,9 +935,19 @@ async def chat_completions(
             f"{context.model_resolved} response received"
         )
 
-        pricing = get_model_pricing(loaded_config).get(
-            context.model_resolved
-        )
+        pricing_map = get_model_pricing(loaded_config)
+        pricing = pricing_map.get(context.model_resolved)
+        if pricing is None and "/" in context.model_resolved:
+            stripped = context.model_resolved.split("/", 1)[1]
+            pricing = pricing_map.get(stripped)
+            if pricing is not None:
+                context.model_resolved = stripped
+
+        if pricing is None and context.model_candidates:
+            pricing = pricing_map.get(context.model_candidates[0])
+            if pricing is not None:
+                context.model_resolved = context.model_candidates[0]
+
         if pricing is None:
             raise UpstreamError(
                 f"No pricing configured for provider-returned "

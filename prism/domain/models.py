@@ -125,6 +125,14 @@ class AliasConfig(BaseModel):
     fallback_chain: list[str] = Field(default_factory=list)
 
 
+class ProviderConfig(BaseModel):
+    """An upstream OpenAI-compatible provider from the provider registry."""
+
+    name: str
+    base_url: str
+    api_key: str = Field(repr=False)
+
+
 class GatewayConfig(BaseModel):
     """Initial gateway-wide runtime configuration."""
 
@@ -132,6 +140,15 @@ class GatewayConfig(BaseModel):
     model_pricing: dict[str, ModelPricing] = Field(default_factory=dict)
     provider_timeout_seconds: float = Field(default=30.0, gt=0)
     max_retries: int = Field(default=2, ge=0)
+
+    # Provider registry (empty => legacy OPENAI_*/GROQ_* environment setup).
+    providers: list[ProviderConfig] = Field(default_factory=list)
+
+    # `auto` routing: classifier tier ("fast"/"smart") -> alias name.
+    auto_routes: dict[str, str] = Field(default_factory=dict)
+
+    # Base delay for exponential backoff; None => use Settings value.
+    retry_base_delay_seconds: float | None = Field(default=None, ge=0)
 
 
 class UsageRecord(BaseModel):
@@ -164,6 +181,7 @@ __all__ = [
     "ProviderResponse",
     "ModelPricing",
     "GatewayConfig",
+    "ProviderConfig",
     "AliasConfig",
     "UsageRecord",
     "MonthlyUsage",

@@ -25,6 +25,12 @@ async def authenticate_request(
     raw_key = request.headers.get("x-api-key")
 
     if not raw_key or not raw_key.strip():
+        authorization = request.headers.get("Authorization", "")
+        scheme, separator, token = authorization.partition(" ")
+        if separator and scheme.lower() == "bearer" and token.strip():
+            raw_key = token.strip()
+
+    if not raw_key or not raw_key.strip():
         context.decision_trace.append("auth failed")
         raise AuthenticationError("Invalid or missing API key.")
 
