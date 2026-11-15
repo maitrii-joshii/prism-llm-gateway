@@ -285,7 +285,10 @@ def test_successful_request_logs_decision_trace(client, caplog):
         ],
     }
 
-    with caplog.at_level(logging.INFO, logger="prism.api.routes"):
+    with caplog.at_level(
+        logging.INFO,
+        logger="prism.services.chat_completion",
+    ):
         response = client.post(
             "/v1/chat/completions",
             json=payload,
@@ -297,7 +300,7 @@ def test_successful_request_logs_decision_trace(client, caplog):
     trace_records = [
         record
         for record in caplog.records
-        if record.name == "prism.api.routes"
+        if record.name == "prism.services.chat_completion"
         and record.getMessage().startswith("Decision trace:")
     ]
 

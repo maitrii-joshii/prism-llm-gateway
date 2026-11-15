@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from unittest.mock import Mock
 
 import pytest
-from starlette.requests import Request
 
 from prism.domain.errors import AuthenticationError
 from prism.domain.models import RequestContext, VirtualKeyConfig
@@ -44,37 +43,6 @@ def context() -> RequestContext:
     )
 
 
-def create_request(
-    api_key: str | None = None,
-    bearer_token: str | None = None,
-) -> Request:
-    """Create a Starlette request with an optional API key or Bearer header."""
-
-    headers = []
-
-    if api_key is not None:
-        headers.append((b"x-api-key", api_key.encode("utf-8")))
-
-    if bearer_token is not None:
-        headers.append(
-            (b"authorization", f"Bearer {bearer_token}".encode("utf-8"))
-        )
-
-    scope = {
-        "type": "http",
-        "method": "POST",
-        "path": "/v1/chat/completions",
-        "headers": headers,
-        "query_string": b"",
-        "server": ("testserver", 80),
-        "client": ("testclient", 12345),
-        "scheme": "http",
-        "http_version": "1.1",
-    }
-
-    return Request(scope)
-
-
 @pytest.mark.asyncio
 async def test_missing_api_key_raises_authentication_error(context):
     """A missing API key must return HTTP 401."""
@@ -83,7 +51,7 @@ async def test_missing_api_key_raises_authentication_error(context):
 
     with pytest.raises(AuthenticationError) as exc_info:
         await authenticate_request(
-            create_request(),
+            None,
             context,
             repository,
         )
@@ -103,7 +71,7 @@ async def test_invalid_api_key_raises_authentication_error(context):
 
     with pytest.raises(AuthenticationError) as exc_info:
         await authenticate_request(
-            create_request("invalid-api-key"),
+            "invalid-api-key",
             context,
             repository,
         )
@@ -129,7 +97,7 @@ async def test_disabled_api_key_raises_authentication_error(
 
     with pytest.raises(AuthenticationError) as exc_info:
         await authenticate_request(
-            create_request(RAW_API_KEY),
+            RAW_API_KEY,
             context,
             repository,
         )
@@ -149,7 +117,7 @@ async def test_valid_api_key_populates_request_context(
     repository.get_by_hash.return_value = key_config
 
     result = await authenticate_request(
-        create_request(RAW_API_KEY),
+        RAW_API_KEY,
         context,
         repository,
     )
@@ -158,17 +126,20 @@ async def test_valid_api_key_populates_request_context(
     assert context.key_config == key_config
     assert context.key_config.tenant_id == "tenant-demo"
     assert context.decision_trace == ["auth ok"]
+    repository.get_by_hash.assert_called_once_with(
+        hash_api_key(RAW_API_KEY)
+    )
 
 
 @pytest.mark.asyncio
 async def test_empty_api_key_raises_authentication_error(context):
-    """An empty API key must return HTTP 401."""
+    """An empty or whitespace-only API key must return HTTP 401."""
 
     repository = Mock()
 
     with pytest.raises(AuthenticationError) as exc_info:
         await authenticate_request(
-            create_request("   "),
+            "   ",
             context,
             repository,
         )
@@ -205,7 +176,7 @@ async def test_hash_comparison_uses_constant_time_function(
     )
 
     await authenticate_request(
-        create_request(RAW_API_KEY),
+        RAW_API_KEY,
         context,
         repository,
     )
@@ -215,21 +186,3 @@ async def test_hash_comparison_uses_constant_time_function(
         hash_api_key(RAW_API_KEY),
         key_config.key_hash,
     )
-
-
-@pytest.mark.asyncio
-async def test_valid_api_key_via_bearer_header(context, key_config):
-    """A valid virtual API key passed via Authorization: Bearer must authenticate."""
-
-    repository = Mock()
-    repository.get_by_hash.return_value = key_config
-
-    result = await authenticate_request(
-        create_request(bearer_token=RAW_API_KEY),
-        context,
-        repository,
-    )
-
-    assert result is context
-    assert context.key_config == key_config
-    assert context.decision_trace == ["auth ok"]

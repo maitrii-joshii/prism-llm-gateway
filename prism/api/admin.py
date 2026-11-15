@@ -4,24 +4,19 @@ import os
 import secrets
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-
-router = APIRouter(
-    prefix="/admin",
-    tags=["Admin"],
-)
+from prism.services.admin import AdminService
 
 
 async def verify_admin_token(request: Request) -> None:
     """Validate the separate Prism admin bearer token."""
 
-    # Prefer token stored in app.state (set at startup from Settings).
-    # Fall back to os.getenv for contexts where app.state is unavailable
-    # (e.g. lightweight test fixtures that don't boot the full app).
-    configured_token = getattr(
-        request.app.state, "admin_token", None
-    ) or os.getenv("PRISM_ADMIN_TOKEN")
+    configured_token = (
+        getattr(request.app.state, "admin_token", None)
+        or os.getenv("PRISM_ADMIN_TOKEN")
+    )
+
     authorization = request.headers.get("Authorization", "")
 
     if not configured_token:
@@ -48,6 +43,13 @@ async def verify_admin_token(request: Request) -> None:
         )
 
 
+router = APIRouter(
+    prefix="/admin",
+    tags=["Admin"],
+    dependencies=[Depends(verify_admin_token)],
+)
+
+
 @router.get("/usage")
 async def get_admin_usage(
     request: Request,
@@ -58,8 +60,6 @@ async def get_admin_usage(
     ),
 ):
     """Return monthly usage grouped by virtual API key."""
-
-    await verify_admin_token(request)
 
     selected_month = month or datetime.now(
         timezone.utc
@@ -88,8 +88,6 @@ async def get_admin_logs(
 ):
     """Return recent request logs with pagination and key filtering."""
 
-    await verify_admin_token(request)
-
     logs = request.app.state.log_repository.get_logs(
         limit=limit,
         offset=offset,
@@ -112,31 +110,14 @@ async def get_admin_logs(
 async def get_admin_cache_stats(request: Request):
     """Return aggregate semantic cache statistics."""
 
-    await verify_admin_token(request)
-
-    stats = request.app.state.cache_repository.get_stats()
-
-    # Compute accurate hit rate from usage records (cache_hits / total_requests).
-    # The cache entry table only tracks stored prompts, not total lookups, so
-    # using total_entries in the denominator would yield a misleading metric.
-    selected_month = datetime.now(timezone.utc).strftime("%Y-%m")
-    usage_records = request.app.state.usage_repository.get_all_usage(
-        selected_month
-    )
-    total_requests = sum(r.total_requests for r in usage_records)
-    total_cache_hits = sum(r.cache_hits for r in usage_records)
-
-    cache_hit_rate = (
-        total_cache_hits / total_requests
-        if total_requests > 0
-        else 0.0
-    )
+    service = AdminService.from_app_state(request.app.state)
+    result = service.get_cache_statistics()
 
     return {
-        **stats.model_dump(mode="json"),
-        "cache_hit_rate": round(cache_hit_rate, 4),
-        "cache_hits_this_month": total_cache_hits,
-        "total_requests_this_month": total_requests,
+        **result.stats.model_dump(mode="json"),
+        "cache_hit_rate": result.cache_hit_rate,
+        "cache_hits_this_month": result.cache_hits_this_month,
+        "total_requests_this_month": result.total_requests_this_month,
     }
 
 

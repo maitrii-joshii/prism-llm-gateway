@@ -1,11 +1,18 @@
 """Unit tests for the Prism LLM Gateway streaming proxy.
 
-Covers immediate chunk forwarding, usage recording, provider errors,
-client disconnects, cleanup, and idle timeout handling.
+Covers:
+- Immediate chunk forwarding
+- Usage recording
+- Provider errors
+- Client disconnects
+- Provider cleanup
+- Idle timeout handling
+- StreamingCompletionService orchestration
 """
 
 import asyncio
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -18,6 +25,13 @@ from prism.domain.models import (
     VirtualKeyConfig,
 )
 from prism.services.streaming import stream_response
+from prism.services.chat_streaming import StreamingCompletionService
+import prism.services.chat_streaming as chat_streaming
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -74,6 +88,11 @@ def make_usage_chunk():
             "total_tokens": 15,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Streaming lifecycle tests
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -169,17 +188,14 @@ async def test_provider_failure_sends_sse_error_and_records_partial_usage(
         )
     ]
 
-    # The client receives an SSE error instead of an exception.
     assert any("event: error" in chunk for chunk in chunks)
     assert any("Provider disconnected" in chunk for chunk in chunks)
     assert any("upstream_error" in chunk for chunk in chunks)
 
-    # Partial usage is still recorded.
     usage_repository.record_usage.assert_called_once()
 
     assert context.cost_usd == pytest.approx(0.00004)
 
-    # The decision trace identifies the upstream failure.
     assert any(
         "upstream_error" in entry
         for entry in context.decision_trace
@@ -301,7 +317,6 @@ async def test_usage_is_recorded_when_stream_idle_timeout_occurs(
     monkeypatch.setenv("PRISM_STREAM_IDLE_TIMEOUT", "0.05")
 
     async def provider_stream():
-        # Send usage first.
         yield make_usage_chunk()
 
         # Simulate a provider that stops sending chunks.
@@ -318,19 +333,247 @@ async def test_usage_is_recorded_when_stream_idle_timeout_occurs(
         )
     ]
 
-    # Verify that an SSE error event is sent.
     assert any("event: error" in chunk for chunk in chunks)
-
-    # Verify that the error identifies an upstream timeout.
     assert any("upstream_error" in chunk for chunk in chunks)
 
-    # Verify that usage is recorded despite the timeout.
     usage_repository.record_usage.assert_called_once()
 
     assert context.cost_usd == pytest.approx(0.00004)
 
-    # Verify that the timeout is recorded in the decision trace.
     assert any(
         "stream idle timeout" in entry
         for entry in context.decision_trace
+    )
+
+
+# ---------------------------------------------------------------------------
+# StreamingCompletionService test helpers
+# ---------------------------------------------------------------------------
+
+
+def create_streaming_service():
+    """Create a StreamingCompletionService with mocked dependencies."""
+
+    usage_repository = MagicMock()
+    loaded_config = MagicMock()
+    log_repository = MagicMock()
+    cache_service = MagicMock()
+    request_logging_service = MagicMock()
+
+    service = StreamingCompletionService(
+        usage_repository=usage_repository,
+        loaded_config=loaded_config,
+        log_repository=log_repository,
+        cache_service=cache_service,
+        request_logging_service=request_logging_service,
+    )
+
+    return service
+
+
+# ---------------------------------------------------------------------------
+# StreamingCompletionService tests
+# ---------------------------------------------------------------------------
+
+
+def test_streaming_service_delegates_cached_response(monkeypatch):
+    """Cached requests use the cached streaming response formatter."""
+
+    service = create_streaming_service()
+
+    context = SimpleNamespace(
+        cache_status="hit",
+        request_payload={"model": "test-model"},
+    )
+
+    result = SimpleNamespace(
+        context=context,
+        stream_adapter=None,
+        request_started_at=123.0,
+    )
+
+    expected_body = object()
+    formatter = MagicMock(return_value=expected_body)
+
+    monkeypatch.setattr(
+        chat_streaming,
+        "format_cached_streaming_body",
+        formatter,
+    )
+
+    body = service.create_body(
+        result=result,
+        raw_api_key="test-api-key",
+    )
+
+    assert body is expected_body
+
+    formatter.assert_called_once_with(
+        context=context,
+        raw_api_key="test-api-key",
+        request_logging_service=service.request_logging_service,
+        log_repository=service.log_repository,
+        request_started_at=123.0,
+    )
+
+
+def test_streaming_service_delegates_provider_response(monkeypatch):
+    """Provider requests reuse the stream created by the executor."""
+
+    service = create_streaming_service()
+
+    context = SimpleNamespace(
+        cache_status="miss",
+        request_payload={"model": "test-model"},
+    )
+
+    provider_stream = object()
+    adapter = MagicMock()
+
+    execution_result = SimpleNamespace(
+        provider_stream=provider_stream,
+    )
+
+    result = SimpleNamespace(
+        context=context,
+        stream_adapter=adapter,
+        stream_execution_result=execution_result,
+        request_started_at=123.0,
+    )
+
+    expected_body = object()
+    formatter = MagicMock(return_value=expected_body)
+
+    monkeypatch.setattr(
+        chat_streaming,
+        "format_streaming_body",
+        formatter,
+    )
+
+    body = service.create_body(
+        result=result,
+        raw_api_key="test-api-key",
+    )
+
+    assert body is expected_body
+
+    formatter.assert_called_once_with(
+        provider_stream=provider_stream,
+        context=context,
+        usage_repository=service.usage_repository,
+        loaded_config=service.loaded_config,
+        adapter=adapter,
+        raw_api_key="test-api-key",
+        request_logging_service=service.request_logging_service,
+        log_repository=service.log_repository,
+        request_started_at=123.0,
+        cache_service=service.cache_service,
+    )
+
+    # The service must not open another provider stream.
+    adapter.stream.assert_not_called()
+
+
+def test_streaming_service_raises_error_when_adapter_missing():
+    """Provider-backed streaming requires a configured adapter."""
+
+    service = create_streaming_service()
+
+    context = SimpleNamespace(
+        cache_status="miss",
+        request_payload={"model": "test-model"},
+    )
+
+    result = SimpleNamespace(
+        context=context,
+        stream_adapter=None,
+        request_started_at=123.0,
+    )
+
+    with pytest.raises(
+        UpstreamError,
+        match="Provider adapter is not configured",
+    ):
+        service.create_body(
+            result=result,
+            raw_api_key="test-api-key",
+        )
+
+
+def test_streaming_service_raises_error_when_execution_result_missing():
+    """Provider-backed streaming requires an executor result."""
+
+    service = create_streaming_service()
+
+    context = SimpleNamespace(
+        cache_status="miss",
+        request_payload={"model": "test-model"},
+    )
+
+    result = SimpleNamespace(
+        context=context,
+        stream_adapter=MagicMock(),
+        stream_execution_result=None,
+        request_started_at=123.0,
+    )
+
+    with pytest.raises(
+        UpstreamError,
+        match="Streaming execution result is not available",
+    ):
+        service.create_body(
+            result=result,
+            raw_api_key="test-api-key",
+        )
+
+
+@pytest.mark.parametrize(
+    "missing_dependency",
+    [
+        "usage_repository",
+        "loaded_config",
+    ],
+)
+def test_streaming_service_rejects_missing_required_dependencies(
+    missing_dependency,
+):
+    """Application state must contain required streaming dependencies."""
+
+    state = SimpleNamespace(
+        usage_repository=MagicMock(),
+        loaded_config=MagicMock(),
+        log_repository=MagicMock(),
+        cache_service=MagicMock(),
+        request_logging_service=MagicMock(),
+    )
+
+    setattr(state, missing_dependency, None)
+
+    with pytest.raises(
+        UpstreamError,
+        match="Streaming dependencies are not configured",
+    ):
+        StreamingCompletionService.from_app_state(state)
+
+
+def test_streaming_service_loads_optional_dependencies_from_app_state():
+    """Optional streaming dependencies are loaded from application state."""
+
+    state = SimpleNamespace(
+        usage_repository=MagicMock(),
+        loaded_config=MagicMock(),
+        log_repository=MagicMock(),
+        cache_service=MagicMock(),
+        request_logging_service=MagicMock(),
+    )
+
+    service = StreamingCompletionService.from_app_state(state)
+
+    assert service.usage_repository is state.usage_repository
+    assert service.loaded_config is state.loaded_config
+    assert service.log_repository is state.log_repository
+    assert service.cache_service is state.cache_service
+    assert (
+        service.request_logging_service
+        is state.request_logging_service
     )

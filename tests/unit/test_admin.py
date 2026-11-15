@@ -1,8 +1,9 @@
-"""Unit tests for the Prism Admin API endpoints."""
+"""Unit tests for the Prism Admin API and AdminService."""
 
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -16,6 +17,7 @@ from prism.adapters.sqlite_repos import (
 )
 from prism.api.admin import router as admin_router
 from prism.api.middleware import request_id_middleware
+from prism.services.admin import AdminService
 
 
 ADMIN_TOKEN = "test-admin-token-secret"
@@ -36,10 +38,67 @@ def create_admin_test_app() -> tuple[FastAPI, str]:
     app.state.log_repository = SQLiteLogRepository(database_path)
     app.state.cache_repository = CacheRepository(database_path)
 
-    # Store temp_dir on app to prevent premature garbage collection.
     app.state._temp_dir = temp_dir
 
     return app, database_path
+
+
+# ---------------------------------------------------------------------------
+# AdminService test helpers
+# ---------------------------------------------------------------------------
+
+
+class FakeCacheRepository:
+    """Fake cache repository for AdminService unit tests."""
+
+    def __init__(self, stats):
+        self.stats = stats
+
+    def get_stats(self):
+        return self.stats
+
+
+class FakeUsageRepository:
+    """Fake usage repository for AdminService unit tests."""
+
+    def __init__(self, records):
+        self.records = records
+        self.requested_month = None
+
+    def get_all_usage(self, month):
+        self.requested_month = month
+        return self.records
+
+
+def create_usage_record(
+    total_requests: int,
+    cache_hits: int,
+):
+    """Create a lightweight usage record for service tests."""
+
+    return SimpleNamespace(
+        total_requests=total_requests,
+        cache_hits=cache_hits,
+    )
+
+
+def create_admin_service(usage_records):
+    """Create AdminService with fake repositories."""
+
+    cache_stats = SimpleNamespace(
+        total_entries=5,
+        total_hits=12,
+    )
+
+    cache_repository = FakeCacheRepository(cache_stats)
+    usage_repository = FakeUsageRepository(usage_records)
+
+    service = AdminService(
+        cache_repository=cache_repository,
+        usage_repository=usage_repository,
+    )
+
+    return service, cache_stats, usage_repository
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +149,78 @@ def test_admin_accepts_correct_token(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Cache hit rate formula tests
+# AdminService unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_admin_service_aggregates_usage_across_multiple_keys():
+    """Cache statistics aggregate usage from multiple virtual keys."""
+
+    usage_records = [
+        create_usage_record(total_requests=4, cache_hits=2),
+        create_usage_record(total_requests=6, cache_hits=1),
+    ]
+
+    service, cache_stats, usage_repository = create_admin_service(
+        usage_records
+    )
+
+    result = service.get_cache_statistics()
+
+    assert result.stats is cache_stats
+    assert result.total_requests_this_month == 10
+    assert result.cache_hits_this_month == 3
+    assert result.cache_hit_rate == 0.3
+
+    assert usage_repository.requested_month is not None
+    assert len(usage_repository.requested_month) == 7
+
+
+def test_admin_service_returns_zero_hit_rate_when_no_requests():
+    """Cache hit rate is zero when there are no usage records."""
+
+    service, cache_stats, _ = create_admin_service([])
+
+    result = service.get_cache_statistics()
+
+    assert result.stats is cache_stats
+    assert result.total_requests_this_month == 0
+    assert result.cache_hits_this_month == 0
+    assert result.cache_hit_rate == 0.0
+
+
+def test_admin_service_rounds_hit_rate_to_four_decimal_places():
+    """Cache hit rate is rounded to four decimal places."""
+
+    usage_records = [
+        create_usage_record(total_requests=3, cache_hits=1),
+    ]
+
+    service, _, _ = create_admin_service(usage_records)
+
+    result = service.get_cache_statistics()
+
+    assert result.cache_hit_rate == 0.3333
+
+
+def test_admin_service_preserves_cache_repository_statistics():
+    """Cache entry statistics are returned from the cache repository."""
+
+    usage_records = [
+        create_usage_record(total_requests=10, cache_hits=4),
+    ]
+
+    service, cache_stats, _ = create_admin_service(usage_records)
+
+    result = service.get_cache_statistics()
+
+    assert result.stats is cache_stats
+    assert result.stats.total_entries == 5
+    assert result.stats.total_hits == 12
+
+
+# ---------------------------------------------------------------------------
+# Cache hit rate API tests
 # ---------------------------------------------------------------------------
 
 
@@ -114,42 +244,25 @@ def test_cache_hit_rate_is_zero_when_no_requests(monkeypatch):
 
 
 def test_cache_hit_rate_computed_from_usage_table(monkeypatch):
-    """
-    Cache hit rate equals cache_hits / total_requests from the usage table.
-
-    This test verifies the CORRECT formula. The old formula used
-    total_hits / (total_hits + total_entries) which divides by the
-    number of distinct cached prompts, not the number of requests.
-
-    With 4 requests of which 2 are cache hits, the rate must be 0.5 (50%).
-    """
+    """Cache hit rate equals cache_hits / total_requests."""
 
     monkeypatch.setenv("PRISM_ADMIN_TOKEN", ADMIN_TOKEN)
     app, database_path = create_admin_test_app()
 
     usage_repo = SQLiteUsageRepository(database_path)
-    key_hash = "aabbccdd" * 8  # 64-char fake hash
+    key_hash = "aabbccdd" * 8
 
     from datetime import datetime, timezone
     month = datetime.now(timezone.utc).strftime("%Y-%m")
 
-    # Simulate 4 requests: 2 cache misses, then 2 cache hits.
-    usage_repo.record_usage(
-        key_hash=key_hash, month=month,
-        cost=0.001, tokens=100, is_cache_hit=False,
-    )
-    usage_repo.record_usage(
-        key_hash=key_hash, month=month,
-        cost=0.001, tokens=100, is_cache_hit=False,
-    )
-    usage_repo.record_usage(
-        key_hash=key_hash, month=month,
-        cost=0.0, tokens=50, is_cache_hit=True,
-    )
-    usage_repo.record_usage(
-        key_hash=key_hash, month=month,
-        cost=0.0, tokens=50, is_cache_hit=True,
-    )
+    for is_cache_hit in [False, False, True, True]:
+        usage_repo.record_usage(
+            key_hash=key_hash,
+            month=month,
+            cost=0.0 if is_cache_hit else 0.001,
+            tokens=50 if is_cache_hit else 100,
+            is_cache_hit=is_cache_hit,
+        )
 
     with TestClient(app) as client:
         response = client.get(
@@ -160,22 +273,13 @@ def test_cache_hit_rate_computed_from_usage_table(monkeypatch):
     assert response.status_code == 200
     body = response.json()
 
-    # 4 total requests, 2 cache hits → 0.5
     assert body["total_requests_this_month"] == 4
     assert body["cache_hits_this_month"] == 2
     assert body["cache_hit_rate"] == 0.5
 
 
 def test_cache_hit_rate_is_not_entries_based(monkeypatch):
-    """
-    Regression test: cache_hit_rate must NOT use total_entries in denominator.
-
-    Old (wrong) formula: total_hits / (total_hits + total_entries)
-    With 2 hits and 1 cache entry: 2/(2+1) = 0.666...
-
-    Correct formula: cache_hits / total_requests
-    With 10 requests and 2 cache hits: 2/10 = 0.2
-    """
+    """Cache hit rate must use total requests, not cache entries."""
 
     monkeypatch.setenv("PRISM_ADMIN_TOKEN", ADMIN_TOKEN)
     app, database_path = create_admin_test_app()
@@ -187,20 +291,24 @@ def test_cache_hit_rate_is_not_entries_based(monkeypatch):
     from datetime import datetime, timezone
     month = datetime.now(timezone.utc).strftime("%Y-%m")
 
-    # 10 total requests: 8 misses, 2 hits.
     for _ in range(8):
         usage_repo.record_usage(
-            key_hash=key_hash, month=month,
-            cost=0.001, tokens=100, is_cache_hit=False,
-        )
-    for _ in range(2):
-        usage_repo.record_usage(
-            key_hash=key_hash, month=month,
-            cost=0.0, tokens=50, is_cache_hit=True,
+            key_hash=key_hash,
+            month=month,
+            cost=0.001,
+            tokens=100,
+            is_cache_hit=False,
         )
 
-    # Store 1 cache entry with 2 accumulated hits recorded in the entry table.
-    # (In the old formula this would have been 2/(2+1) = 0.666)
+    for _ in range(2):
+        usage_repo.record_usage(
+            key_hash=key_hash,
+            month=month,
+            cost=0.0,
+            tokens=50,
+            is_cache_hit=True,
+        )
+
     cache_repo.store(
         key_hash=key_hash,
         alias="fast",
@@ -217,13 +325,15 @@ def test_cache_hit_rate_is_not_entries_based(monkeypatch):
     assert response.status_code == 200
     body = response.json()
 
-    # Must equal 2/10 = 0.2, not 2/(2+1) = 0.666
     assert body["cache_hit_rate"] == pytest.approx(0.2)
-    # Also check the raw counts are exposed correctly
     assert body["total_requests_this_month"] == 10
     assert body["cache_hits_this_month"] == 2
-    # total_entries from cache table is still exposed (useful for ops)
     assert body["total_entries"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Admin endpoint tests
+# ---------------------------------------------------------------------------
 
 
 def test_admin_usage_endpoint(monkeypatch):
@@ -239,8 +349,11 @@ def test_admin_usage_endpoint(monkeypatch):
     month = datetime.now(timezone.utc).strftime("%Y-%m")
 
     usage_repo.record_usage(
-        key_hash=key_hash, month=month,
-        cost=0.005, tokens=500, is_cache_hit=False,
+        key_hash=key_hash,
+        month=month,
+        cost=0.005,
+        tokens=500,
+        is_cache_hit=False,
     )
 
     with TestClient(app) as client:
@@ -272,4 +385,3 @@ def test_admin_logs_endpoint(monkeypatch):
     body = response.json()
     assert "logs" in body
     assert body["count"] == 0
-

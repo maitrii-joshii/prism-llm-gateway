@@ -2,8 +2,6 @@
 
 import hmac
 
-from fastapi import Request
-
 from prism.domain.errors import AuthenticationError
 from prism.domain.models import RequestContext
 from prism.domain.security import hash_api_key
@@ -11,30 +9,22 @@ from prism.ports.repositories import KeyRepository
 
 
 async def authenticate_request(
-    request: Request,
+    raw_api_key: str | None,
     context: RequestContext,
     key_repository: KeyRepository,
 ) -> RequestContext:
     """
-    Authenticate an incoming request using its x-api-key header.
+    Authenticate an incoming request using its API key.
 
     On success, attach the VirtualKeyConfig to RequestContext.
     On failure, raise AuthenticationError with HTTP 401.
     """
 
-    raw_key = request.headers.get("x-api-key")
-
-    if not raw_key or not raw_key.strip():
-        authorization = request.headers.get("Authorization", "")
-        scheme, separator, token = authorization.partition(" ")
-        if separator and scheme.lower() == "bearer" and token.strip():
-            raw_key = token.strip()
-
-    if not raw_key or not raw_key.strip():
+    if not raw_api_key or not raw_api_key.strip():
         context.decision_trace.append("auth failed")
         raise AuthenticationError("Invalid or missing API key.")
 
-    provided_hash = hash_api_key(raw_key)
+    provided_hash = hash_api_key(raw_api_key.strip())
 
     key_config = key_repository.get_by_hash(provided_hash)
 
@@ -42,12 +32,10 @@ async def authenticate_request(
         context.decision_trace.append("auth failed")
         raise AuthenticationError("Invalid or missing API key.")
 
-    # Compare the computed hash with the hash returned by the repository.
     if not hmac.compare_digest(provided_hash, key_config.key_hash):
         context.decision_trace.append("auth failed")
         raise AuthenticationError("Invalid or missing API key.")
 
-    # Reject disabled or inactive virtual keys.
     if key_config.status.lower() != "active":
         context.decision_trace.append("auth failed")
         raise AuthenticationError("Invalid or missing API key.")
