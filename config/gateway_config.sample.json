@@ -2,18 +2,18 @@
   "aliases": {
     "fast": {
       "alias_name": "fast",
-      "primary_model": "gpt-4o-mini",
-      "fallback_chain": ["llama-3.3-70b-versatile"]
+      "primary_model": "openai/gpt-4o-mini",
+      "fallback_chain": ["qwen/qwen3.8-27b"]
     },
     "smart": {
       "alias_name": "smart",
-      "primary_model": "llama-3.3-70b-versatile",
-      "fallback_chain": ["gpt-4o-mini"]
+      "primary_model": "qwen/qwen3.8-27b",
+      "fallback_chain": ["openai/gpt-4o-mini"]
     },
-    "quality": {
-      "alias_name": "quality",
-      "primary_model": "llama-3.3-70b-versatile",
-      "fallback_chain": ["gpt-4o-mini"]
+    "auto": {
+      "alias_name": "auto",
+      "primary_model": "qwen/qwen3.8-27b",
+      "fallback_chain": ["openai/gpt-4o-mini"]
     }
   },
   "provider_timeout_seconds": 30.0,

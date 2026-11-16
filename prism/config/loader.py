@@ -241,7 +241,7 @@ def provider_for_model(
     matches = [
         provider
         for provider in providers
-        if model_name.startswith(f"{provider.name}-")
+        if model_name.startswith(f"{provider.name}") or provider.name.startswith(f"{model_name}")
     ]
 
     if not matches:
@@ -345,7 +345,7 @@ def _build_providers(raw_providers: Any) -> list[ProviderConfig]:
             raise ConfigLoadError(
                 f"Invalid provider '{name}': {exc}"
             ) from exc
-
+    print(providers)
     return providers
 
 

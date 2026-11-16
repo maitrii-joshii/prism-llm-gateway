@@ -5,9 +5,9 @@ from prism.domain.models import RequestContext
 
 
 ALIAS_TO_MODELS = {
-    "fast": {"gpt-4o-mini"},
+    "fast": {"openai/gpt-4o-mini"},
     "smart": {"llama-3.3-70b-versatile"},
-    "quality": {"llama-3.3-70b-versatile"},
+    "auto": {"qwen/qwen3.8-27b"},
 }
 
 

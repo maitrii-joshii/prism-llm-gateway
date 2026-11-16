@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -356,8 +357,15 @@
     }
 
     @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.4; }
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.4;
+      }
     }
 
     /* ── Empty / Error States ────────────────────────────── */
@@ -430,7 +438,9 @@
       margin-bottom: 6px;
     }
 
-    .select-input, .text-input, .textarea-input {
+    .select-input,
+    .text-input,
+    .textarea-input {
       width: 100%;
       background: var(--bg);
       border: 1px solid var(--border);
@@ -443,7 +453,9 @@
       transition: border-color 0.15s;
     }
 
-    .select-input:focus, .text-input:focus, .textarea-input:focus {
+    .select-input:focus,
+    .text-input:focus,
+    .textarea-input:focus {
       border-color: var(--accent);
     }
 
@@ -563,6 +575,7 @@
     }
   </style>
 </head>
+
 <body>
   <!-- ── Header ──────────────────────────────────────── -->
   <header class="app-header">
@@ -591,13 +604,8 @@
     <!-- Auth Bar -->
     <div class="auth-bar">
       <label for="admin-token">Admin Token</label>
-      <input
-        type="password"
-        id="admin-token"
-        placeholder="Enter your PRISM_ADMIN_TOKEN…"
-        autocomplete="off"
-        spellcheck="false"
-      />
+      <input type="password" id="admin-token" placeholder="Enter your PRISM_ADMIN_TOKEN…" autocomplete="off"
+        spellcheck="false" />
       <button class="btn btn-primary" onclick="fetchAll()">Connect</button>
     </div>
 
@@ -635,7 +643,8 @@
     <div class="section">
       <div class="section-header">
         <h2>Interactive Playground & Model Router Tester</h2>
-        <span style="font-size:12px;color:var(--text-muted)">Test live prompt classification, model selection & semantic cache</span>
+        <span style="font-size:12px;color:var(--text-muted)">Test live prompt classification, model selection & semantic
+          cache</span>
       </div>
 
       <div class="playground-card">
@@ -645,7 +654,8 @@
             <div class="control-group">
               <label for="play-key">Virtual API Key</label>
               <select id="play-key" class="select-input">
-                <option value="prism-sk-search-1a2b3c">prism-sk-search-1a2b3c (Full Access: Auto, Fast, Smart + Cache)</option>
+                <option value="prism-sk-search-1a2b3c">prism-sk-search-1a2b3c (Full Access: Auto, Fast, Smart + Cache)
+                </option>
                 <option value="prism-sk-alias-demo">prism-sk-alias-demo (Aliases: Auto, Fast, Smart, Quality)</option>
                 <option value="prism-demo-rate-limit-10">prism-demo-rate-limit-10 (Rate Limit Test: 10 RPM)</option>
               </select>
@@ -656,28 +666,26 @@
               <select id="play-model" class="select-input">
                 <option value="auto">auto — Smart Difficulty Router (AI Hot Path)</option>
                 <option value="fast">fast — Fast Tier (Primary: gpt-4o-mini)</option>
-                <option value="smart">smart — Smart Tier (Primary: llama-3.3-70b-versatile)</option>
-                <option value="gpt-4o-mini">gpt-4o-mini (Direct OpenAI)</option>
-                <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Direct Groq)</option>
+                <option value="smart">smart — Smart Tier (Primary: qwen3.8-27b)</option>
               </select>
             </div>
 
             <div class="control-group">
               <label>Quick Test Presets</label>
               <div class="presets-row">
-                <button type="button" class="btn-pill" onclick="setPreset('simple')">⚡ Simple &rarr; Auto picks Fast</button>
-                <button type="button" class="btn-pill" onclick="setPreset('complex')">🧠 Complex &rarr; Auto picks Smart</button>
-                <button type="button" class="btn-pill" onclick="setPreset('cache')">💾 Cache Hit Test (Paraphrase)</button>
+                <button type="button" class="btn-pill" onclick="setPreset('simple')">⚡ Simple &rarr; Auto picks
+                  Fast</button>
+                <button type="button" class="btn-pill" onclick="setPreset('complex')">🧠 Complex &rarr; Auto picks
+                  Smart</button>
+                <button type="button" class="btn-pill" onclick="setPreset('cache')">💾 Cache Hit Test
+                  (Paraphrase)</button>
               </div>
             </div>
 
             <div class="control-group">
               <label for="play-prompt">Question / Prompt</label>
-              <textarea
-                id="play-prompt"
-                class="textarea-input"
-                placeholder="Ask any question or prompt to test model selection (e.g. 'What is 2+2?' vs 'Write a distributed lock')..."
-              >What is the boiling point of water at standard atmospheric pressure in Celsius?</textarea>
+              <textarea id="play-prompt" class="textarea-input"
+                placeholder="Ask any question or prompt to test model selection (e.g. 'What is 2+2?' vs 'Write a distributed lock')...">What is the boiling point of water at standard atmospheric pressure in Celsius?</textarea>
             </div>
 
             <div style="display:flex;gap:10px;">
@@ -726,7 +734,8 @@
 
             <div class="control-group" style="margin-bottom:0;flex:1;display:flex;flex-direction:column;">
               <label>Model Response</label>
-              <div id="insp-response" class="response-box">Click "Ask Gateway" to submit your question. The selected model and answer will appear here.</div>
+              <div id="insp-response" class="response-box">Click "Ask Gateway" to submit your question. The selected
+                model and answer will appear here.</div>
             </div>
           </div>
         </div>
@@ -918,7 +927,7 @@
         try {
           const j = JSON.parse(body);
           msg = j.detail || j.error?.message || msg;
-        } catch {}
+        } catch { }
         throw new Error(msg);
       }
       return resp.json();
@@ -1124,7 +1133,7 @@
           try {
             const j = JSON.parse(errText);
             errMsg = j.error?.message || j.detail || errMsg;
-          } catch {}
+          } catch { }
           pill.className = "badge badge-red";
           pill.textContent = "Error " + res.status;
           respBox.textContent = "Error: " + errMsg;
@@ -1245,5 +1254,5 @@
       });
   </script>
 </body>
-</html>
 
+</html>
