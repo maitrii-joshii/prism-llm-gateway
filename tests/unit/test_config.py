@@ -70,7 +70,7 @@ def test_alias_names_accepted_in_model_allowlist(temporary_config):
 
     assert "fast" in alias_key.model_allowlist
     assert "smart" in alias_key.model_allowlist
-    assert "quality" in alias_key.model_allowlist
+    assert "auto" in alias_key.model_allowlist
     assert alias_key.rate_limit_rpm == 120
 
 

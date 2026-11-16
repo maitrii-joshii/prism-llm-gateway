@@ -332,9 +332,61 @@
       color: var(--blue);
     }
 
+    .badge-accent {
+      background: rgba(99, 102, 241, 0.15);
+      color: var(--accent-hover);
+    }
+
     .badge-muted {
       background: rgba(139, 141, 152, 0.12);
       color: var(--text-muted);
+    }
+
+    /* ── Tabs Navigation ─────────────────────────────────── */
+    .tabs-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 12px;
+    }
+
+    .tab-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text-muted);
+      font-family: var(--font);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .tab-btn:hover {
+      background: var(--surface-hover);
+      color: var(--text);
+      border-color: var(--accent);
+    }
+
+    .tab-btn.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+      box-shadow: 0 2px 10px rgba(99, 102, 241, 0.25);
+    }
+
+    .tab-panel {
+      display: none;
+    }
+
+    .tab-panel.active {
+      display: block;
     }
 
     /* ── Status Indicator ────────────────────────────────── */
@@ -601,211 +653,229 @@
 
   <!-- ── Main Content ────────────────────────────────── -->
   <div class="main">
-    <!-- Auth Bar -->
-    <div class="auth-bar">
-      <label for="admin-token">Admin Token</label>
-      <input type="password" id="admin-token" placeholder="Enter your PRISM_ADMIN_TOKEN…" autocomplete="off"
-        spellcheck="false" />
-      <button class="btn btn-primary" onclick="fetchAll()">Connect</button>
+    <!-- Tabs Navigation -->
+    <div class="tabs-bar" role="tablist">
+      <button type="button" class="tab-btn active" id="tab-btn-admin" role="tab" aria-selected="true"
+        aria-controls="tab-admin" onclick="switchTab('admin')">
+        🛡️ Admin
+      </button>
+      <button type="button" class="tab-btn" id="tab-btn-playground" role="tab" aria-selected="false"
+        aria-controls="tab-playground" onclick="switchTab('playground')">
+        ⚡ Playground &amp; Response
+      </button>
     </div>
 
-    <!-- Error Banner -->
-    <div class="error-banner" id="error-banner">
-      <span>⚠</span>
-      <span id="error-message"></span>
-    </div>
-
-    <!-- Stat Cards -->
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-label">Cache Hit Rate</div>
-        <div class="stat-value green" id="stat-hit-rate">—</div>
-        <div class="stat-sub" id="stat-hit-detail">No data</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Cache Entries</div>
-        <div class="stat-value blue" id="stat-cache-entries">—</div>
-        <div class="stat-sub">Stored responses</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Active Keys</div>
-        <div class="stat-value accent" id="stat-active-keys">—</div>
-        <div class="stat-sub" id="stat-keys-month">This month</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Total Spend</div>
-        <div class="stat-value yellow" id="stat-total-spend">—</div>
-        <div class="stat-sub" id="stat-spend-month">This month</div>
-      </div>
-    </div>
-
-    <!-- ── Interactive Playground (Questioning & Model Inspector) ── -->
-    <div class="section">
-      <div class="section-header">
-        <h2>Interactive Playground & Model Router Tester</h2>
-        <span style="font-size:12px;color:var(--text-muted)">Test live prompt classification, model selection & semantic
-          cache</span>
+    <!-- ── TAB 1: Admin ──────────────────────────────── -->
+    <div class="tab-panel active" id="tab-admin" role="tabpanel" aria-labelledby="tab-btn-admin">
+      <!-- Auth Bar -->
+      <div class="auth-bar">
+        <label for="admin-token">Admin Token</label>
+        <input type="password" id="admin-token" placeholder="Enter your PRISM_ADMIN_TOKEN…" autocomplete="off"
+          spellcheck="false" />
+        <button class="btn btn-primary" onclick="fetchAll()">Connect</button>
       </div>
 
-      <div class="playground-card">
-        <div class="playground-grid">
-          <!-- Left: Prompt Controls -->
-          <div class="playground-controls">
-            <div class="control-group">
-              <label for="play-key">Virtual API Key</label>
-              <select id="play-key" class="select-input">
-                <option value="prism-sk-search-1a2b3c">prism-sk-search-1a2b3c (Full Access: Auto, Fast, Smart + Cache)
-                </option>
-                <option value="prism-sk-alias-demo">prism-sk-alias-demo (Aliases: Auto, Fast, Smart, Quality)</option>
-                <option value="prism-demo-rate-limit-10">prism-demo-rate-limit-10 (Rate Limit Test: 10 RPM)</option>
-              </select>
-            </div>
+      <!-- Error Banner -->
+      <div class="error-banner" id="error-banner">
+        <span>⚠</span>
+        <span id="error-message"></span>
+      </div>
 
-            <div class="control-group">
-              <label for="play-model">Model / Routing Target</label>
-              <select id="play-model" class="select-input">
-                <option value="auto">auto — Smart Difficulty Router (AI Hot Path)</option>
-                <option value="fast">fast — Fast Tier (Primary: gpt-4o-mini)</option>
-                <option value="smart">smart — Smart Tier (Primary: qwen3.8-27b)</option>
-              </select>
-            </div>
+      <!-- Stat Cards -->
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Cache Hit Rate</div>
+          <div class="stat-value green" id="stat-hit-rate">—</div>
+          <div class="stat-sub" id="stat-hit-detail">No data</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Cache Entries</div>
+          <div class="stat-value blue" id="stat-cache-entries">—</div>
+          <div class="stat-sub">Stored responses</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Active Keys</div>
+          <div class="stat-value accent" id="stat-active-keys">—</div>
+          <div class="stat-sub" id="stat-keys-month">This month</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total Spend</div>
+          <div class="stat-value yellow" id="stat-total-spend">—</div>
+          <div class="stat-sub" id="stat-spend-month">This month</div>
+        </div>
+      </div>
 
-            <div class="control-group">
-              <label>Quick Test Presets</label>
-              <div class="presets-row">
-                <button type="button" class="btn-pill" onclick="setPreset('simple')">⚡ Simple &rarr; Auto picks
-                  Fast</button>
-                <button type="button" class="btn-pill" onclick="setPreset('complex')">🧠 Complex &rarr; Auto picks
-                  Smart</button>
-                <button type="button" class="btn-pill" onclick="setPreset('cache')">💾 Cache Hit Test
-                  (Paraphrase)</button>
-              </div>
-            </div>
-
-            <div class="control-group">
-              <label for="play-prompt">Question / Prompt</label>
-              <textarea id="play-prompt" class="textarea-input"
-                placeholder="Ask any question or prompt to test model selection (e.g. 'What is 2+2?' vs 'Write a distributed lock')...">What is the boiling point of water at standard atmospheric pressure in Celsius?</textarea>
-            </div>
-
-            <div style="display:flex;gap:10px;">
-              <button class="btn btn-primary" id="btn-send-play" onclick="sendPlaygroundQuestion()">
-                Ask Gateway
-              </button>
-              <button class="btn" onclick="clearPlayground()">
-                Clear
-              </button>
-            </div>
+      <!-- Usage Table -->
+      <div class="section">
+        <div class="section-header">
+          <h2>Usage by Key</h2>
+        </div>
+        <div class="table-wrap">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Key Hash</th>
+                  <th>Month</th>
+                  <th>Spend (USD)</th>
+                  <th>Tokens</th>
+                  <th>Requests</th>
+                  <th>Cache Hits</th>
+                </tr>
+              </thead>
+              <tbody id="usage-tbody">
+                <tr>
+                  <td colspan="6">
+                    <div class="empty-state">
+                      <p>Enter your admin token and click Connect.</p>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
+        </div>
+      </div>
 
-          <!-- Right: Live Inspector & Response -->
-          <div class="inspector-panel">
-            <div class="inspector-header">
-              <span>Live Decision Inspector</span>
-              <span id="play-status-pill" class="badge badge-muted">Idle</span>
-            </div>
-
-            <div class="inspector-metrics">
-              <div class="metric-box">
-                <div class="metric-label">Model Selected</div>
-                <div class="metric-val" id="insp-model">—</div>
-              </div>
-              <div class="metric-box">
-                <div class="metric-label">Provider</div>
-                <div class="metric-val" id="insp-provider">—</div>
-              </div>
-              <div class="metric-box">
-                <div class="metric-label">Cache</div>
-                <div class="metric-val" id="insp-cache">—</div>
-              </div>
-              <div class="metric-box">
-                <div class="metric-label">Fallback</div>
-                <div class="metric-val" id="insp-fallback">—</div>
-              </div>
-              <div class="metric-box">
-                <div class="metric-label">Cost (USD)</div>
-                <div class="metric-val yellow" id="insp-cost">—</div>
-              </div>
-              <div class="metric-box">
-                <div class="metric-label">Latency</div>
-                <div class="metric-val blue" id="insp-latency">—</div>
-              </div>
-            </div>
-
-            <div class="control-group" style="margin-bottom:0;flex:1;display:flex;flex-direction:column;">
-              <label>Model Response</label>
-              <div id="insp-response" class="response-box">Click "Ask Gateway" to submit your question. The selected
-                model and answer will appear here.</div>
-            </div>
+      <!-- Recent Requests Table -->
+      <div class="section">
+        <div class="section-header">
+          <h2>Recent Requests</h2>
+        </div>
+        <div class="table-wrap">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Request ID</th>
+                  <th>Time</th>
+                  <th>Status</th>
+                  <th>Model</th>
+                  <th>Provider</th>
+                  <th>Tokens</th>
+                  <th>Cost</th>
+                  <th>Cache</th>
+                  <th>Fallback</th>
+                  <th>Latency</th>
+                </tr>
+              </thead>
+              <tbody id="logs-tbody">
+                <tr>
+                  <td colspan="10">
+                    <div class="empty-state">
+                      <p>No request logs loaded yet.</p>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Usage Table -->
-    <div class="section">
-      <div class="section-header">
-        <h2>Usage by Key</h2>
-      </div>
-      <div class="table-wrap">
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Key Hash</th>
-                <th>Month</th>
-                <th>Spend (USD)</th>
-                <th>Tokens</th>
-                <th>Requests</th>
-                <th>Cache Hits</th>
-              </tr>
-            </thead>
-            <tbody id="usage-tbody">
-              <tr>
-                <td colspan="6">
-                  <div class="empty-state">
-                    <p>Enter your admin token and click Connect.</p>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+    <!-- ── TAB 2: Playground & Response ──────────────── -->
+    <div class="tab-panel" id="tab-playground" role="tabpanel" aria-labelledby="tab-btn-playground">
+      <!-- ── Interactive Playground (Questioning & Model Inspector) ── -->
+      <div class="section">
+        <div class="section-header">
+          <h2>Interactive Playground &amp; Model Router Tester</h2>
+          <span style="font-size:12px;color:var(--text-muted)">Test live prompt classification, model selection &amp; semantic
+            cache</span>
         </div>
-      </div>
-    </div>
 
-    <!-- Recent Requests Table -->
-    <div class="section">
-      <div class="section-header">
-        <h2>Recent Requests</h2>
-      </div>
-      <div class="table-wrap">
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Request ID</th>
-                <th>Time</th>
-                <th>Status</th>
-                <th>Model</th>
-                <th>Provider</th>
-                <th>Tokens</th>
-                <th>Cost</th>
-                <th>Cache</th>
-                <th>Fallback</th>
-                <th>Latency</th>
-              </tr>
-            </thead>
-            <tbody id="logs-tbody">
-              <tr>
-                <td colspan="10">
-                  <div class="empty-state">
-                    <p>No request logs loaded yet.</p>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="playground-card">
+          <div class="playground-grid">
+            <!-- Left: Prompt Controls -->
+            <div class="playground-controls">
+              <div class="control-group">
+                <label for="play-key">Virtual API Key</label>
+                <select id="play-key" class="select-input">
+                  <option value="prism-sk-search-1a2b3c">prism-sk-search-1a2b3c (Full Access: Auto, Fast, Smart + Cache)
+                  </option>
+                  <option value="prism-sk-alias-demo">prism-sk-alias-demo (Aliases: Auto, Fast, Smart, Quality)</option>
+                  <option value="prism-demo-rate-limit-10">prism-demo-rate-limit-10 (Rate Limit Test: 10 RPM)</option>
+                </select>
+              </div>
+
+              <div class="control-group">
+                <label for="play-model">Model / Routing Target</label>
+                <select id="play-model" class="select-input">
+                  <option value="auto">auto — Smart Difficulty Router (AI Hot Path)</option>
+                  <option value="fast">fast — Fast Tier (Primary: gpt-4o-mini)</option>
+                  <option value="smart">smart — Smart Tier (Primary: qwen3.8-27b)</option>
+                </select>
+              </div>
+
+              <div class="control-group">
+                <label>Quick Test Presets</label>
+                <div class="presets-row">
+                  <button type="button" class="btn-pill" onclick="setPreset('simple')">⚡ Simple &rarr; Auto picks
+                    Fast</button>
+                  <button type="button" class="btn-pill" onclick="setPreset('complex')">🧠 Complex &rarr; Auto picks
+                    Smart</button>
+                  <button type="button" class="btn-pill" onclick="setPreset('cache')">💾 Cache Hit Test
+                    (Paraphrase)</button>
+                </div>
+              </div>
+
+              <div class="control-group">
+                <label for="play-prompt">Question / Prompt</label>
+                <textarea id="play-prompt" class="textarea-input"
+                  placeholder="Ask any question or prompt to test model selection (e.g. 'What is 2+2?' vs 'Write a distributed lock')...">What is the boiling point of water at standard atmospheric pressure in Celsius?</textarea>
+              </div>
+
+              <div style="display:flex;gap:10px;">
+                <button class="btn btn-primary" id="btn-send-play" onclick="sendPlaygroundQuestion()">
+                  Ask Gateway
+                </button>
+                <button class="btn" onclick="clearPlayground()">
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            <!-- Right: Live Inspector & Response -->
+            <div class="inspector-panel">
+              <div class="inspector-header">
+                <span>Live Decision Inspector</span>
+                <span id="play-status-pill" class="badge badge-muted">Idle</span>
+              </div>
+
+              <div class="inspector-metrics">
+                <div class="metric-box">
+                  <div class="metric-label">Model Selected</div>
+                  <div class="metric-val" id="insp-model">—</div>
+                </div>
+                <div class="metric-box">
+                  <div class="metric-label">Provider</div>
+                  <div class="metric-val" id="insp-provider">—</div>
+                </div>
+                <div class="metric-box">
+                  <div class="metric-label">Cache</div>
+                  <div class="metric-val" id="insp-cache">—</div>
+                </div>
+                <div class="metric-box">
+                  <div class="metric-label">Fallback</div>
+                  <div class="metric-val" id="insp-fallback">—</div>
+                </div>
+                <div class="metric-box">
+                  <div class="metric-label">Cost (USD)</div>
+                  <div class="metric-val yellow" id="insp-cost">—</div>
+                </div>
+                <div class="metric-box">
+                  <div class="metric-label">Latency</div>
+                  <div class="metric-val blue" id="insp-latency">—</div>
+                </div>
+              </div>
+
+              <div class="control-group" style="margin-bottom:0;flex:1;display:flex;flex-direction:column;">
+                <label>Model Response</label>
+                <div id="insp-response" class="response-box">Click "Ask Gateway" to submit your question. The selected
+                  model and answer will appear here.</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -816,6 +886,23 @@
     // ── State ────────────────────────────────────────────
     let autoRefreshTimer = null;
     const AUTO_REFRESH_MS = 10_000;
+
+    // ── Tab Navigation ───────────────────────────────────
+    function switchTab(tabName) {
+      const isPlayground = tabName === "playground";
+      const adminBtn = document.getElementById("tab-btn-admin");
+      const playBtn = document.getElementById("tab-btn-playground");
+      const adminPanel = document.getElementById("tab-admin");
+      const playPanel = document.getElementById("tab-playground");
+
+      adminBtn.classList.toggle("active", !isPlayground);
+      adminBtn.setAttribute("aria-selected", String(!isPlayground));
+      playBtn.classList.toggle("active", isPlayground);
+      playBtn.setAttribute("aria-selected", String(isPlayground));
+
+      adminPanel.classList.toggle("active", !isPlayground);
+      playPanel.classList.toggle("active", isPlayground);
+    }
 
     // ── Helpers ──────────────────────────────────────────
     function getToken() {
