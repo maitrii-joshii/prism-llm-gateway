@@ -1,53 +1,4 @@
-# Prism + the unmodified Airtribe starter mock providers (stdlib only).
-#
-# The gateway loads the starter data files in ./data unchanged
-# (seed_keys.json, model_pricing.json, gateway_config.sample.json).
-# Provider base URLs are overridden below so they resolve inside the
-# compose network instead of localhost.
 services:
-  alpha-mock:
-    image: python:3.12-slim
-    container_name: prism-alpha-mock
-    working_dir: /app
-    volumes:
-      - ./scripts/mock_provider.py:/app/mock_provider.py:ro
-    command: ["python", "mock_provider.py", "--port", "9001", "--name", "alpha"]
-    ports:
-      - "9001:9001"
-    networks:
-      - prism-network
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://localhost:9001/health', timeout=3)"
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-
-  beta-mock:
-    image: python:3.12-slim
-    container_name: prism-beta-mock
-    working_dir: /app
-    volumes:
-      - ./scripts/mock_provider.py:/app/mock_provider.py:ro
-    command: ["python", "mock_provider.py", "--port", "9002", "--name", "beta"]
-    ports:
-      - "9002:9002"
-    networks:
-      - prism-network
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://localhost:9002/health', timeout=3)"
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
 
   prism-gateway:
     build:
@@ -61,17 +12,15 @@ services:
       - prism-db:/app/dbdata
     environment:
       PORT: "3000"
-      PRISM_CONFIG_DIR: /app/data
+      PRISM_CONFIG_DIR: /app/config
       PRISM_DB_PATH: /app/dbdata/prism.db
       PRISM_LOG_LEVEL: INFO
       PRISM_ADMIN_TOKEN: ${PRISM_ADMIN_TOKEN:-admin-secret-change-me}
-      PRISM_PROVIDER_ALPHA_BASE_URL: http://alpha-mock:9001/v1
-      PRISM_PROVIDER_BETA_BASE_URL: http://beta-mock:9002/v1
-    depends_on:
-      alpha-mock:
-        condition: service_healthy
-      beta-mock:
-        condition: service_healthy
+      PRISM_PROVIDER_OPENAI_API_KEY: enter-your-key-here
+      PRISM_PROVIDER_OPENAI_BASE_URL: https://openrouter.ai/api/v1
+      PRISM_PROVIDER_QWEN_API_KEY: enter-your-key-here
+      PRISM_PROVIDER_QWEN_BASE_URL: https://api.groq.com/openai/v1
+
     networks:
       - prism-network
     restart: unless-stopped

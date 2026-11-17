@@ -33,7 +33,7 @@ COPY --from=builder /app .
 ENV PORT=3000 \
     PRISM_PORT=3000 \
     PRISM_LOG_LEVEL=INFO \
-    PRISM_CONFIG_DIR=/app/data \
+    PRISM_CONFIG_DIR=/app/config \
     PRISM_DB_PATH=/app/dbdata/prism.db
 
 # SQLite lives in its own directory so a volume can persist it without
@@ -51,4 +51,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 USER prism
 
 # Start gateway with dynamic port support.
-CMD ["sh", "-c", "python -m uvicorn prism.main:app --host 0.0.0.0 --port ${PORT:-3000}"]
+CMD ["sh", "-c", "python -m prism.main"]
